@@ -128,7 +128,7 @@ subscription execution proof, and no unsupported Level A claim.
 - [x] T035 [P] Create local MCP configuration example in `.codex/config.toml.example`.
 - [x] T036 Run formatter, linter, type checker, full tests, and dogfood command from `specs/001-internal-loop/quickstart.md`.
 - [x] T037 Review tracked files for secrets, machine-specific data, dead code, stale specs, and v0.2 runtime leakage using `git diff --check`, `rg`, and `git status`.
-- [ ] T038 Commit meaningful milestones and publish verified `main` to the public GitHub repository.
+- [x] T038 Commit meaningful milestones and publish verified `main` to the public GitHub repository.
 
 ## Dependencies and Execution Order
 
