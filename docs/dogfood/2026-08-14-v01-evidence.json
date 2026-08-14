@@ -1,0 +1,76 @@
+{
+  "recorded_on": "2026-08-14",
+  "automation_level": "C",
+  "manual_prompt_copy_count": 0,
+  "scripted_harness": {
+    "run_id": "c43e306d-c6b7-433b-9683-e7fc9cfd4e82",
+    "final_state": "COMPLETE",
+    "max_iterations": 4,
+    "iterations": 2,
+    "events_produced": 11,
+    "restart_reconstructed": true,
+    "state_transitions": [
+      "RUN_CREATED",
+      "PLANNING_STARTED",
+      "INSTRUCTION_SUBMITTED",
+      "TURN_CLAIMED",
+      "RESULT_SUBMITTED",
+      "REVIEW_STARTED",
+      "INSTRUCTION_SUBMITTED",
+      "TURN_CLAIMED",
+      "RESULT_SUBMITTED",
+      "REVIEW_STARTED",
+      "COMPLETED"
+    ],
+    "evidence": "The harness ran two typed planner/worker turns, restarted the controller after turn one, and ran the full suite successfully (53 passed)."
+  },
+  "subscription_adapter_dogfood": {
+    "run_id": "bdf69114-aa71-44fb-b84a-f40f93a02077",
+    "executor": {
+      "interface": "ultracode worker-once via Codex CLI",
+      "authentication": "existing ChatGPT subscription",
+      "model": "gpt-5.5",
+      "sandbox": "read-only",
+      "codex_cli_version": "0.141.0"
+    },
+    "final_state": "COMPLETE",
+    "max_iterations": 2,
+    "iterations": 2,
+    "events_produced": 11,
+    "state_transitions": [
+      "RUN_CREATED",
+      "PLANNING_STARTED",
+      "INSTRUCTION_SUBMITTED",
+      "TURN_CLAIMED",
+      "RESULT_SUBMITTED",
+      "REVIEW_STARTED",
+      "INSTRUCTION_SUBMITTED",
+      "TURN_CLAIMED",
+      "RESULT_SUBMITTED",
+      "REVIEW_STARTED",
+      "COMPLETED"
+    ],
+    "turn_one_evidence": "Codex inspected the controller and protocol and confirmed that TURN_CLAIMED event payloads omit lease tokens while active lease/idempotency storage retains the live token needed for a safe result submission.",
+    "turn_two_evidence": "Codex inspected the public MCP/CLI history paths and confirmed they use the redacted event projection; malformed MCP payloads returned field-specific JSON-RPC validation errors.",
+    "manual_interventions_required": [
+      "Planner-side create, submit-instruction, and complete operations were explicitly initiated.",
+      "The subscription-backed worker command was explicitly launched twice.",
+      "No arbitrary ChatGPT thread continuation was available or claimed."
+    ],
+    "worker_sandbox_limit": "The read-only Codex sandbox could inspect source and directly validate MCP handler shapes, but could not initialize uv/pytest writable cache and temporary directories. The full suite was run separately in the outer development environment."
+  },
+  "dogfood_revisions": [
+    "An initial adapter attempt exposed an invalid Codex response schema with untyped array items; the adapter now uses typed text arrays for Codex-generated evidence, tests, and commands.",
+    "Review evidence exposed lease-token exposure in immutable event payloads, non-actionable MCP validation errors, and missing per-run instruction-ID uniqueness; each was fixed with regression tests before the final two-turn run."
+  ],
+  "final_outer_environment_validation": {
+    "result": "53 passed",
+    "commands": [
+      "uv run --no-editable ruff format --check .",
+      "uv run --no-editable ruff check .",
+      "uv run --no-editable mypy ultracode",
+      "uv run --no-editable pytest"
+    ]
+  },
+  "boundary": "The run proves the local typed state and subscription-backed Codex execution path. Planner continuation remains an explicit Level C action."
+}

@@ -1,0 +1,27 @@
+{
+  "name": "42-ultracode",
+  "version": "0.1.0+codex.20260814160000",
+  "description": "Repository-local Codex plugin scaffold and MCP launch guidance for bounded ChatGPT and Codex engineering loops.",
+  "author": {
+    "name": "42 Ultracode contributors"
+  },
+  "keywords": [
+    "codex",
+    "chatgpt",
+    "mcp",
+    "orchestration",
+    "sqlite"
+  ],
+  "interface": {
+    "displayName": "42 Ultracode",
+    "shortDescription": "Local MCP setup guidance for disciplined Codex workflow state.",
+    "longDescription": "Packages the 42 Ultracode v0.1 project boundary and documents role-scoped local MCP setup without assuming a portable project path.",
+    "developerName": "42 Ultracode",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Show me how to configure a role-scoped local 42 Ultracode MCP server."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,34 @@
+# 42 Ultracode local MCP configuration example.
+#
+# This file deliberately enables only the worker role. For a planner or control
+# actor, replace that active block with exactly one matching commented block
+# below. Do not configure planner, worker, and control servers in the same model
+# session by default: role separation is part of the v0.1 safety model.
+#
+# Replace /ABSOLUTE/PATH/TO/42-ultracode with the path to this checkout. All
+# selected actors must use the same database path. The database is local state;
+# keep it out of version control and do not put credentials in this file.
+#
+# This is a project example, not an instruction to overwrite a user's global
+# Codex configuration. Merge the selected block into the appropriate trusted
+# project/client configuration, then validate it with `codex mcp list`.
+
+# Worker surface (default for a Codex executor task):
+[mcp_servers.ultracode_worker]
+command = "uv"
+args = ["run", "--no-editable", "ultracode", "mcp", "--role", "worker", "--database", ".ultracode/ultracode.db"]
+cwd = "/ABSOLUTE/PATH/TO/42-ultracode"
+
+# Planner surface (for example, a supported local ChatGPT desktop MCP client).
+# Remove the active worker block above before enabling this one:
+# [mcp_servers.ultracode_planner]
+# command = "uv"
+# args = ["run", "--no-editable", "ultracode", "mcp", "--role", "planner", "--database", ".ultracode/ultracode.db"]
+# cwd = "/ABSOLUTE/PATH/TO/42-ultracode"
+
+# Human control surface (status/history/pause/resume/stop only). Remove the
+# active worker block above before enabling this one:
+# [mcp_servers.ultracode_control]
+# command = "uv"
+# args = ["run", "--no-editable", "ultracode", "mcp", "--role", "control", "--database", ".ultracode/ultracode.db"]
+# cwd = "/ABSOLUTE/PATH/TO/42-ultracode"
