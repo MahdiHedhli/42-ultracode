@@ -2,6 +2,9 @@
 
 ## D2 Security Repair Plan
 
+0. Register one exact D4 checkpoint-free read-only policy while preserving the
+   existing D2 transport policy and closed registry construction.
+
 0. Anchor prompt authorization in a closed reviewed-policy registry and bind
    canonical policy identity into sealed and durable frontier records.
 

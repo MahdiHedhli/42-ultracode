@@ -4,6 +4,12 @@
 
 ## D2 Security Repair Addendum
 
+The closed registry includes a reviewed D4 checkpoint-free read-only
+investigation policy. Registry construction MUST reject source mutation,
+checkpoint access, inference, automatic chat posting, and unsafe human gates.
+Registration grants no execution authority until a separately verified prompt
+selects the policy at a future frontier.
+
 Prompt authorization MUST be anchored by a closed adapter-owned registry. A
 caller supplies only a reviewed policy identifier; it cannot construct or
 substitute the eleven trusted values. The registry policy ID and canonical

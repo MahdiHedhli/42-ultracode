@@ -81,6 +81,9 @@ The trusted profile is selected from a closed code-reviewed registry by stable
 policy ID. Its canonical SHA-256 and ID are sealed into the verified identity
 and persisted in frontier metadata so replay/binding validation does not trust
 caller-supplied authorization values.
+The D4 registration is a separate immutable registry entry whose canonical
+identity permits only checkpoint-free read-only investigation. It does not
+change the currently selected execution policy or grant D4 execution authority.
 
 ### Durable parent identity
 

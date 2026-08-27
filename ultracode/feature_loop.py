@@ -409,6 +409,7 @@ class ReviewedPromptPolicy(StrEnum):
     """Stable identifiers for code-reviewed, checkpoint-free prompt policies."""
 
     F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR = "f017-m2-d2-policy-trust-anchor-repair-v1"
+    F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION = "f017-m2-d4-checkpoint-free-repack-investigation-v1"
 
 
 _AUTHORIZATION_FIELDS = (
@@ -425,6 +426,12 @@ _AUTHORIZATION_FIELDS = (
     "automatic_chat_posting",
 )
 _POLICY_TOKEN = object()
+_PROHIBITED_CAPABILITY_FIELDS = (
+    "source_mutation",
+    "original_checkpoint_access",
+    "full_model_inference",
+    "automatic_chat_posting",
+)
 
 
 class _PromptAuthorizationPolicy:
@@ -451,6 +458,10 @@ class _PromptAuthorizationPolicy:
         normalized = {field: values[field].strip() for field in _AUTHORIZATION_FIELDS}
         if any(not value for value in normalized.values()) or normalized["schema"] != PROMPT_SCHEMA:
             raise FrontierError("reviewed prompt policy contains an unsupported value")
+        if any(normalized[field] != "PROHIBITED" for field in _PROHIBITED_CAPABILITY_FIELDS):
+            raise FrontierError("reviewed prompt policy widens a prohibited capability")
+        if not normalized["human_gate"].startswith("NOT_REQUIRED_CHECKPOINT_FREE_"):
+            raise FrontierError("reviewed prompt policy contains an unsafe human gate")
         canonical = json.dumps(
             {"authorization": normalized, "policy_id": policy_id.value},
             sort_keys=True,
@@ -501,7 +512,21 @@ _REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = 
             original_checkpoint_access="PROHIBITED",
             full_model_inference="PROHIBITED",
             automatic_chat_posting="PROHIBITED",
-        )
+        ),
+        ReviewedPromptPolicy.F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D4-checkpoint-free-repack-investigation",
+            human_gate="NOT_REQUIRED_CHECKPOINT_FREE_READ_ONLY",
+            source_repository="MahdiHedhli/PulsarMLX",
+            source_mutation="PROHIBITED",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        ),
     }
 )
 

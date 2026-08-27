@@ -47,6 +47,7 @@ PARENT = "parent response\n"
 PARENT_SHA = sha256(PARENT.encode()).hexdigest()
 
 POLICY_ID = ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR
+D4_POLICY_ID = ReviewedPromptPolicy.F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION
 AUTHORIZATION = {
     "schema": "pulsarmlx.graph-prompt/1.0.0",
     "feature_id": "F017",
@@ -59,6 +60,11 @@ AUTHORIZATION = {
     "original_checkpoint_access": "PROHIBITED",
     "full_model_inference": "PROHIBITED",
     "automatic_chat_posting": "PROHIBITED",
+}
+D4_AUTHORIZATION = {
+    **AUTHORIZATION,
+    "phase": "Feature-Loop-D4-checkpoint-free-repack-investigation",
+    "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_READ_ONLY",
 }
 
 FEATURE = """\
@@ -88,26 +94,30 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def prompt_markdown(base_commit: str, parent_sha: str = PARENT_SHA) -> str:
+def prompt_markdown(
+    base_commit: str,
+    parent_sha: str = PARENT_SHA,
+    authorization: dict[str, str] = AUTHORIZATION,
+) -> str:
     return f"""---
-schema: pulsarmlx.graph-prompt/1.0.0
-feature_id: F017
+schema: {authorization["schema"]}
+feature_id: {authorization["feature_id"]}
 sequence: 1
-machine_model: MacBook Pro M2 Max
-machine_architecture: arm64
-phase: Feature-Loop-D2-policy-trust-anchor-repair
-human_gate: NOT_REQUIRED_CHECKPOINT_FREE_REPAIR
+machine_model: {authorization["machine_model"]}
+machine_architecture: {authorization["machine_architecture"]}
+phase: {authorization["phase"]}
+human_gate: {authorization["human_gate"]}
 prompt_control_base_commit: {base_commit}
 expected_parent_response_path: {PARENT_PATH}
 expected_parent_response_sha256: {parent_sha}
 response_path: {RESPONSE_PATH}
 response_checksum_path: {CHECKSUM_PATH}
 handoff_path: {HANDOFF_PATH}
-source_repository: MahdiHedhli/PulsarMLX
-source_mutation: PROHIBITED
-original_checkpoint_access: PROHIBITED
-full_model_inference: PROHIBITED
-automatic_chat_posting: PROHIBITED
+source_repository: {authorization["source_repository"]}
+source_mutation: {authorization["source_mutation"]}
+original_checkpoint_access: {authorization["original_checkpoint_access"]}
+full_model_inference: {authorization["full_model_inference"]}
+automatic_chat_posting: {authorization["automatic_chat_posting"]}
 ---
 
 # Synthetic repair prompt
@@ -158,9 +168,9 @@ class PromptFixture:
         )
 
 
-def disposable_prompt_repo(tmp_path: Path) -> PromptFixture:
+def disposable_prompt_repo(tmp_path: Path, authorization: dict[str, str] = AUTHORIZATION) -> PromptFixture:
     repo = tmp_path / "prompts"
-    repo.mkdir()
+    repo.mkdir(parents=True)
     git(repo, "init", "-q")
     git(repo, "config", "user.name", "Fixture")
     git(repo, "config", "user.email", "fixture@example.invalid")
@@ -171,7 +181,7 @@ def disposable_prompt_repo(tmp_path: Path) -> PromptFixture:
     git(repo, "commit", "-qm", "parent")
     base = git(repo, "rev-parse", "HEAD")
 
-    prompt = prompt_markdown(base)
+    prompt = prompt_markdown(base, authorization=authorization)
     prompt_sha = sha256(prompt.encode()).hexdigest()
     (repo / PROMPT_PATH).write_text(prompt)
     (repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
@@ -486,6 +496,76 @@ def test_policy_identity_is_durable_and_registry_policy_rejects_serialization(tm
             sidecar_path=PROMPT_SIDECAR,
             policy_id=POLICY_ID,
             policy_resolver=lambda _policy_id: policy,
+        )
+
+
+def test_exact_d4_policy_registration_and_cross_policy_rejection(tmp_path: Path) -> None:
+    old_fixture = disposable_prompt_repo(tmp_path / "old")
+    d4_fixture = disposable_prompt_repo(tmp_path / "d4", D4_AUTHORIZATION)
+    d4_identity = d4_fixture.transport.verify_prompt_identity(
+        prompt_commit=d4_fixture.prompt_commit,
+        prompt_path=PROMPT_PATH,
+        expected_sha256=d4_fixture.prompt_sha,
+        sidecar_path=PROMPT_SIDECAR,
+        policy_id=D4_POLICY_ID,
+    )
+    assert d4_identity.policy_sha256 == "89bb8b74fadda6562eb791cf1f932de9307896e578d3f32c59688457277f59af"
+    binding = FrontierBinding.from_identity(d4_identity, result_identity="d4-policy-result")
+    assert FrontierBinding.from_dict(binding.to_dict()) == binding
+    with pytest.raises(FrontierError, match="authorization mismatch"):
+        d4_fixture.transport.verify_prompt_identity(
+            prompt_commit=d4_fixture.prompt_commit,
+            prompt_path=PROMPT_PATH,
+            expected_sha256=d4_fixture.prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=POLICY_ID,
+        )
+    with pytest.raises(FrontierError, match="authorization mismatch"):
+        old_fixture.transport.verify_prompt_identity(
+            prompt_commit=old_fixture.prompt_commit,
+            prompt_path=PROMPT_PATH,
+            expected_sha256=old_fixture.prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=D4_POLICY_ID,
+        )
+
+
+@pytest.mark.parametrize(("field", "replacement"), AUTHORIZATION_MUTATIONS)
+def test_every_d4_policy_field_is_bound(tmp_path: Path, field: str, replacement: str) -> None:
+    fixture = disposable_prompt_repo(tmp_path, D4_AUTHORIZATION)
+    prompt = (fixture.repo / PROMPT_PATH).read_text()
+    prompt = prompt.replace(f"{field}: {D4_AUTHORIZATION[field]}", f"{field}: {replacement}", 1)
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", f"mutate d4 {field}")
+    with pytest.raises(FrontierError, match=f"authorization mismatch: {field}"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=git(fixture.repo, "rev-parse", "HEAD"),
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=D4_POLICY_ID,
+        )
+
+
+def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> None:
+    import ultracode.feature_loop as feature_loop
+
+    registry = feature_loop._REVIEWED_POLICIES
+    assert set(registry) == {POLICY_ID, D4_POLICY_ID}
+    with pytest.raises(TypeError):
+        registry[D4_POLICY_ID] = registry[POLICY_ID]  # type: ignore[index]
+    with pytest.raises(FrontierError, match="widens a prohibited capability"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D4_POLICY_ID,
+            **{**D4_AUTHORIZATION, "original_checkpoint_access": "ALLOWED"},
+        )
+    with pytest.raises(FrontierError, match="unsafe human gate"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D4_POLICY_ID,
+            **{**D4_AUTHORIZATION, "human_gate": "AUTOMATIC_EVENT_06_AUTHORITY"},
         )
 
 

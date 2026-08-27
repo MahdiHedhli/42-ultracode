@@ -313,6 +313,11 @@ profile injection, policy copying/serialization/callback substitution, and
 policy digest mismatch before lease acquisition and during durable binding
 reconstruction.
 
+Sequence 4 registers one D4 checkpoint-free read-only policy. Validation must
+derive its canonical digest through production code, prove cross-policy phase
+and gate rejection, bind every field independently, reject registry mutation
+and unsafe minting, and preserve the existing D2 policy for sequence execution.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

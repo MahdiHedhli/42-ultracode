@@ -1,0 +1,33 @@
+{
+  "checkpoint_access": "NONE",
+  "controller_events": 11,
+  "d4_execution": "NONE",
+  "d5_execution": "NONE",
+  "dogfood_final_state": "COMPLETE",
+  "dogfood_iterations": 2,
+  "event_05_retry_or_resume": "NONE",
+  "event_06_execution_or_launch": "NONE",
+  "execution_policy_id": "f017-m2-d2-policy-trust-anchor-repair-v1",
+  "execution_policy_sha256": "d0187ae426b82d676c5cb370be669f58e17b75eae4036597a758d40c6949446b",
+  "feature_id": "F017",
+  "full_model_inference": "NONE",
+  "machine_model": "MacBook Pro M2 Max",
+  "next_policy_id": "f017-m2-d4-checkpoint-free-repack-investigation-v1",
+  "next_policy_sha256": "89bb8b74fadda6562eb791cf1f932de9307896e578d3f32c59688457277f59af",
+  "original_checkpoint_root_resolved": false,
+  "prompt_commit": "1c339f3b6579f3d8e8b9acece2930ad3c73d6533",
+  "prompt_sha256": "98632cb7d77b2b343cf4e668d87e6ac1257d5cea38522b215b2365357871dde3",
+  "pulsarmlx_repository_accessed": false,
+  "pulsarmlx_source_mutation": "NONE",
+  "sequence": 4,
+  "restart_reconstructed": true,
+  "subscription_transport_probe": "NOT_RERUN_TRANSPORT_BOUNDARY_UNCHANGED",
+  "tests": {
+    "dogfood": "PASS",
+    "mypy": "PASS",
+    "pytest": "215 passed",
+    "ruff_format": "PASS",
+    "ruff_lint": "PASS",
+    "uv_sync": "PASS"
+  }
+}
