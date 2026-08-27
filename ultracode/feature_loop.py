@@ -46,6 +46,11 @@ _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
+PROMPT_SCHEMA = "pulsarmlx.graph-prompt/1.0.0"
+FEATURE_SCHEMA = "pulsarmlx.feature-loop/1.0.0"
+STATE_SCHEMA = "pulsarmlx.feature-loop-state/1.0.0"
+PRIVACY_SCHEMA = "pulsarmlx.prompt-privacy-policy/1.0.0"
+
 
 def _fail(message: str) -> NoReturn:
     raise ManifestError(message)
@@ -197,6 +202,7 @@ def _required_int(data: Mapping[str, object], key: str) -> int:
 
 @dataclass(frozen=True)
 class FeatureManifest:
+    schema: str
     feature_id: str
     status: str
     state_file: str
@@ -205,6 +211,9 @@ class FeatureManifest:
     @classmethod
     def from_yaml(cls, text: str) -> FeatureManifest:
         raw = parse_restricted_yaml(text)
+        schema = _required_string(raw, "schema")
+        if schema != FEATURE_SCHEMA:
+            raise ManifestError(f"unsupported feature manifest schema: {schema}")
         sequences = raw.get("latest_machine_sequence")
         if not isinstance(sequences, dict) or not sequences:
             raise ManifestError("latest_machine_sequence must be a non-empty mapping")
@@ -214,6 +223,7 @@ class FeatureManifest:
                 raise ManifestError("machine sequence values must be non-negative integers")
             typed_sequences[str(machine)] = sequence
         return cls(
+            schema=schema,
             feature_id=_required_string(raw, "feature_id"),
             status=_required_string(raw, "status"),
             state_file=validate_relative_path(_required_string(raw, "state_file")),
@@ -261,6 +271,7 @@ def _optional_nonnegative_int(data: Mapping[str, object], key: str) -> int | Non
 
 @dataclass(frozen=True)
 class FeatureState:
+    schema: str
     feature_id: str
     state: str
     current_machine: str
@@ -280,6 +291,9 @@ class FeatureState:
             raise ManifestError("STATE.json is invalid JSON") from exc
         if not isinstance(raw, dict):
             raise ManifestError("STATE.json root must be an object")
+        schema = _required_string(raw, "schema")
+        if schema != STATE_SCHEMA:
+            raise ManifestError(f"unsupported feature state schema: {schema}")
         latest = raw.get("latest_response")
         latest_response: LatestResponse | None = None
         if latest is not None:
@@ -322,6 +336,7 @@ class FeatureState:
             if latest_prompt is None:
                 raise ManifestError("sequence 1+ requires complete latest_prompt identity")
         return cls(
+            schema=schema,
             feature_id=_required_string(raw, "feature_id"),
             state=_required_string(raw, "state"),
             current_machine=_required_string(raw, "current_machine"),
@@ -333,6 +348,7 @@ class FeatureState:
 
 @dataclass(frozen=True)
 class PrivacyPolicy:
+    schema: str
     feature_id: str
     allowed: tuple[str, ...]
     prohibited: tuple[str, ...]
@@ -341,6 +357,9 @@ class PrivacyPolicy:
     @classmethod
     def from_yaml(cls, text: str) -> PrivacyPolicy:
         raw = parse_restricted_yaml(text)
+        schema = _required_string(raw, "schema")
+        if schema != PRIVACY_SCHEMA:
+            raise ManifestError(f"unsupported privacy policy schema: {schema}")
         allowed = raw.get("allowed")
         prohibited = raw.get("prohibited")
         aliases = raw.get("local_aliases")
@@ -353,6 +372,7 @@ class PrivacyPolicy:
         ):
             raise ManifestError("privacy local_aliases must be a string mapping")
         return cls(
+            schema=schema,
             feature_id=_required_string(raw, "feature_id"),
             allowed=tuple(cast(list[str], allowed)),
             prohibited=tuple(cast(list[str], prohibited)),
@@ -385,18 +405,59 @@ _ENVELOPE_FIELDS = frozenset(
 
 
 @dataclass(frozen=True)
+class PromptAuthorizationProfile:
+    """Trusted controller policy that untrusted prompt front matter must match."""
+
+    schema: str
+    feature_id: str
+    machine_model: str
+    machine_architecture: str
+    phase: str
+    human_gate: str
+    source_repository: str
+    source_mutation: str
+    original_checkpoint_access: str
+    full_model_inference: str
+    automatic_chat_posting: str
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ManifestError(f"trusted authorization field must be non-empty: {field_name}")
+        if self.schema != PROMPT_SCHEMA:
+            raise ManifestError(f"unsupported trusted prompt schema: {self.schema}")
+
+    def values(self) -> Mapping[str, str]:
+        return {field_name: cast(str, getattr(self, field_name)) for field_name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True)
 class PromptEnvelope:
+    schema: str
     feature_id: str
     sequence: int
     machine_model: str
     machine_slug: str
+    machine_architecture: str
+    phase: str
+    human_gate: str
     expected_parent_response_path: str
     expected_parent_response_sha256: str
     response_path: str
     response_checksum_path: str
     handoff_path: str
     source_repository: str
+    source_mutation: str
+    original_checkpoint_access: str
+    full_model_inference: str
+    automatic_chat_posting: str
     prompt_control_base_commit: str
+
+    def require_authorization(self, trusted: PromptAuthorizationProfile) -> None:
+        for field_name, expected in trusted.values().items():
+            if getattr(self, field_name) != expected:
+                raise FrontierError(f"prompt authorization mismatch: {field_name}")
 
     @classmethod
     def from_markdown(cls, text: str) -> PromptEnvelope:
@@ -424,10 +485,14 @@ class PromptEnvelope:
             raise ManifestError("prompt-control base commit is invalid")
         machine_model = _required_string(raw, "machine_model")
         return cls(
+            schema=_required_string(raw, "schema"),
             feature_id=_required_string(raw, "feature_id"),
             sequence=sequence,
             machine_model=machine_model,
             machine_slug=machine_model.replace(" ", "-"),
+            machine_architecture=_required_string(raw, "machine_architecture"),
+            phase=_required_string(raw, "phase"),
+            human_gate=_required_string(raw, "human_gate"),
             expected_parent_response_path=validate_relative_path(
                 _required_string(raw, "expected_parent_response_path")
             ),
@@ -436,6 +501,10 @@ class PromptEnvelope:
             response_checksum_path=validate_relative_path(_required_string(raw, "response_checksum_path")),
             handoff_path=validate_relative_path(_required_string(raw, "handoff_path")),
             source_repository=_required_string(raw, "source_repository"),
+            source_mutation=_required_string(raw, "source_mutation"),
+            original_checkpoint_access=_required_string(raw, "original_checkpoint_access"),
+            full_model_inference=_required_string(raw, "full_model_inference"),
+            automatic_chat_posting=_required_string(raw, "automatic_chat_posting"),
             prompt_control_base_commit=base,
         )
 
@@ -451,9 +520,11 @@ class VerifiedPromptIdentity:
     prompt_sha256: str
     sidecar_path: str
     envelope: PromptEnvelope
+    _authorization_profile: PromptAuthorizationProfile
     _sealed: bool
 
     __slots__ = (
+        "_authorization_profile",
         "_sealed",
         "envelope",
         "prompt_commit",
@@ -469,6 +540,7 @@ class VerifiedPromptIdentity:
         prompt_sha256: str,
         sidecar_path: str,
         envelope: PromptEnvelope,
+        authorization_profile: PromptAuthorizationProfile,
         *,
         _token: object,
     ) -> None:
@@ -479,7 +551,12 @@ class VerifiedPromptIdentity:
         object.__setattr__(self, "prompt_sha256", prompt_sha256)
         object.__setattr__(self, "sidecar_path", sidecar_path)
         object.__setattr__(self, "envelope", envelope)
+        object.__setattr__(self, "_authorization_profile", authorization_profile)
         object.__setattr__(self, "_sealed", True)
+
+    @property
+    def authorization_profile(self) -> PromptAuthorizationProfile:
+        return self._authorization_profile
 
     def __setattr__(self, _name: str, _value: object) -> NoReturn:
         raise FrontierError("verified prompt identity is immutable")
@@ -566,6 +643,7 @@ class GitPromptTransport:
         prompt_path: str,
         expected_sha256: str,
         sidecar_path: str,
+        authorization_profile: PromptAuthorizationProfile,
     ) -> VerifiedPromptIdentity:
         """Bind exact prompt bytes, sidecar, envelope, commit, and ancestry."""
 
@@ -585,6 +663,7 @@ class GitPromptTransport:
         fields = lines[0].split()
         if len(fields) != 2 or fields[0] != expected_sha256 or fields[1] != Path(safe_prompt).name:
             raise FrontierError("prompt sidecar identity mismatch")
+        envelope.require_authorization(authorization_profile)
         self.require_ancestor(envelope.prompt_control_base_commit, prompt_commit)
         return VerifiedPromptIdentity(
             safe_prompt,
@@ -592,6 +671,7 @@ class GitPromptTransport:
             expected_sha256,
             safe_sidecar,
             envelope,
+            authorization_profile,
             _token=_VERIFIED_PROMPT_TOKEN,
         )
 
@@ -633,6 +713,7 @@ def guard_frontier(
     transport.resolve_commit(live_commit)
     transport.require_ancestor(identity.prompt_commit, live_commit)
     envelope = identity.envelope
+    envelope.require_authorization(identity.authorization_profile)
     manifest = FeatureManifest.from_yaml(transport.read(live_commit, feature_path).decode("utf-8"))
     state = FeatureState.from_json(transport.read(live_commit, state_path).decode("utf-8"))
     if manifest.status != state.state or state.state != FeatureLoopState.PROMPT_AVAILABLE.value:

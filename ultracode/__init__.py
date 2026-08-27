@@ -1,7 +1,13 @@
 """42 Ultracode — subscription-native local workflow orchestration."""
 
 from .controller import Controller
-from .feature_loop import FeatureManifest, FeatureState, PromptEnvelope, VerifiedPromptIdentity
+from .feature_loop import (
+    FeatureManifest,
+    FeatureState,
+    PromptAuthorizationProfile,
+    PromptEnvelope,
+    VerifiedPromptIdentity,
+)
 from .protocol import (
     Actor,
     Event,
@@ -21,6 +27,7 @@ __all__ = [
     "FeatureManifest",
     "FeatureState",
     "Instruction",
+    "PromptAuthorizationProfile",
     "PromptEnvelope",
     "RunSnapshot",
     "RunState",

@@ -6,6 +6,7 @@ description: "Actionable implementation tasks for 001-internal-loop"
 
 ## D2 Security Repair
 
+- [x] D2R-0 Bind all prompt authorization fields to trusted typed policy and enforce exact control-document schemas.
 - [x] D2R-1 Bind prompt bytes, sidecar, path, commit, envelope, and ancestry before lease acquisition.
 - [x] D2R-2 Verify complete expected-parent and live-frontier identities.
 - [x] D2R-3 Make resolved aliases non-serializable and reject them recursively from durable payloads.

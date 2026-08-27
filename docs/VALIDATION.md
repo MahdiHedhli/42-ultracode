@@ -301,6 +301,12 @@ compiled privacy-category coverage, complete staged-diff scanning, and paired
 feature/state expected-hash races. Publication is not accepted until both
 control documents are staged and committed together.
 
+Sequence 2 additionally mutates each trusted authorization field independently,
+recomputes the untrusted prompt identity, and requires rejection before any
+lease, controller-history change, or tracked mutation. Prompt, feature, state,
+and privacy schemas are exact-version gates, and a verified identity cannot be
+rebound to a different authorization profile.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

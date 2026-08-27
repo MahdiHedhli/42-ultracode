@@ -73,8 +73,10 @@ lease automatically.
 
 The verified identity is a sealed in-memory capability containing the exact
 prompt commit, repository-relative path, calculated SHA-256, adjacent sidecar,
-parsed envelope, and proven control-base ancestry. It is created only by the
-Git transport and is required directly by lease acquisition.
+parsed envelope, immutable controller-supplied authorization profile, and proven
+control-base ancestry. It is created only by the Git transport and is required
+directly by lease acquisition. Every authorization field is retained and must
+match the trusted profile exactly; prompt text cannot authorize itself.
 
 ### Durable parent identity
 

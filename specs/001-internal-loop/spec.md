@@ -4,6 +4,14 @@
 
 ## D2 Security Repair Addendum
 
+The verified prompt identity MUST also bind an immutable trusted authorization
+profile supplied by the controller or adapter. Prompt front matter is untrusted:
+all schema, machine, phase, human-gate, repository, mutation, checkpoint,
+inference, and chat-posting fields MUST be retained and compared exactly before
+lease acquisition. Feature, state, and privacy-policy schemas MUST match their
+supported version exactly. An authorization mismatch MUST produce no lease,
+controller-history change, or tracked repository mutation.
+
 Sequence 1 and later MUST acquire a worker lease only from a sealed prompt
 identity that binds exact Git commit, repository-relative path, calculated
 SHA-256, adjacent basename sidecar, parsed envelope, and control-base ancestry.

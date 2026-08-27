@@ -21,6 +21,7 @@ from ultracode.feature_loop import (
     LocalAliasResolver,
     PrivacyPolicy,
     PrivacyScanner,
+    PromptAuthorizationProfile,
     PublicationCoordinator,
     PublicationError,
     PublicationRequest,
@@ -42,6 +43,20 @@ FEATURE_PATH = "Prompts/F017/FEATURE.yaml"
 STATE_PATH = "Prompts/F017/STATE.json"
 PARENT = "parent response\n"
 PARENT_SHA = sha256(PARENT.encode()).hexdigest()
+
+AUTHORIZATION = PromptAuthorizationProfile(
+    schema="pulsarmlx.graph-prompt/1.0.0",
+    feature_id="F017",
+    machine_model="MacBook Pro M2 Max",
+    machine_architecture="arm64",
+    phase="Feature-Loop-D2-envelope-authorization-repair",
+    human_gate="NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
+    source_repository="MahdiHedhli/PulsarMLX",
+    source_mutation="PROHIBITED",
+    original_checkpoint_access="PROHIBITED",
+    full_model_inference="PROHIBITED",
+    automatic_chat_posting="PROHIBITED",
+)
 
 FEATURE = """\
 schema: pulsarmlx.feature-loop/1.0.0
@@ -77,7 +92,7 @@ feature_id: F017
 sequence: 1
 machine_model: MacBook Pro M2 Max
 machine_architecture: arm64
-phase: D2-security-repair
+phase: Feature-Loop-D2-envelope-authorization-repair
 human_gate: NOT_REQUIRED_CHECKPOINT_FREE_REPAIR
 prompt_control_base_commit: {base_commit}
 expected_parent_response_path: {PARENT_PATH}
@@ -98,6 +113,7 @@ automatic_chat_posting: PROHIBITED
 
 def state_document(prompt_commit: str, parent_commit: str) -> dict[str, Any]:
     return {
+        "schema": "pulsarmlx.feature-loop-state/1.0.0",
         "feature_id": "F017",
         "state": "PROMPT_AVAILABLE",
         "current_machine": "MacBook-Pro-M2-Max",
@@ -135,6 +151,7 @@ class PromptFixture:
             prompt_path=PROMPT_PATH,
             expected_sha256=self.prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
+            authorization_profile=AUTHORIZATION,
         )
 
 
@@ -275,6 +292,7 @@ def test_wrong_prompt_hash_produces_zero_lease_claims(tmp_path: Path) -> None:
             prompt_path=PROMPT_PATH,
             expected_sha256="0" * 64,
             sidecar_path=PROMPT_SIDECAR,
+            authorization_profile=AUTHORIZATION,
         )
     assert controller.history(run_id) == before
     assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
@@ -294,6 +312,7 @@ def test_correct_bytes_at_wrong_path_or_commit_fail(tmp_path: Path) -> None:
             prompt_path="Prompts/F017/wrong.md",
             expected_sha256=fixture.prompt_sha,
             sidecar_path="Prompts/F017/wrong.md.sha256",
+            authorization_profile=AUTHORIZATION,
         )
         guard_frontier(identity=identity, transport=fixture.transport, live_commit=latest)
     with pytest.raises(FrontierError, match="absent"):
@@ -302,6 +321,7 @@ def test_correct_bytes_at_wrong_path_or_commit_fail(tmp_path: Path) -> None:
             prompt_path=PROMPT_PATH,
             expected_sha256=fixture.prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
+            authorization_profile=AUTHORIZATION,
         )
 
 
@@ -318,7 +338,80 @@ def test_malformed_missing_renamed_or_conflicting_sidecar_fails(tmp_path: Path, 
             prompt_path=PROMPT_PATH,
             expected_sha256=fixture.prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
+            authorization_profile=AUTHORIZATION,
         )
+
+
+AUTHORIZATION_MUTATIONS = [
+    ("schema", "pulsarmlx.graph-prompt/9.9.9"),
+    ("feature_id", "F999"),
+    ("machine_model", "Other Machine"),
+    ("machine_architecture", "x86_64"),
+    ("phase", "other-phase"),
+    ("human_gate", "BYPASSED"),
+    ("source_repository", "attacker/repository"),
+    ("source_mutation", "ALLOWED"),
+    ("original_checkpoint_access", "ALLOWED"),
+    ("full_model_inference", "ALLOWED"),
+    ("automatic_chat_posting", "ALLOWED"),
+]
+
+
+@pytest.mark.parametrize(("field", "replacement"), AUTHORIZATION_MUTATIONS)
+def test_every_prompt_authorization_field_is_bound_before_lease(tmp_path: Path, field: str, replacement: str) -> None:
+    fixture = disposable_prompt_repo(tmp_path)
+    prompt = (fixture.repo / PROMPT_PATH).read_text()
+    prompt = prompt.replace(f"{field}: {getattr(AUTHORIZATION, field)}", f"{field}: {replacement}", 1)
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", f"mutate {field}")
+    prompt_commit = git(fixture.repo, "rev-parse", "HEAD")
+    state = json.loads((fixture.repo / STATE_PATH).read_text())
+    state["latest_prompt"] = {"path": PROMPT_PATH, "sha256": prompt_sha, "commit": prompt_commit}
+    (fixture.repo / STATE_PATH).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    git(fixture.repo, "add", STATE_PATH)
+    git(fixture.repo, "commit", "-qm", "publish malicious frontier")
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    repository_head = git(fixture.repo, "rev-parse", "HEAD")
+    repository_status = git(fixture.repo, "status", "--porcelain=v1")
+
+    with pytest.raises(FrontierError, match=f"authorization mismatch: {field}"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=prompt_commit,
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            authorization_profile=AUTHORIZATION,
+        )
+
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+    assert git(fixture.repo, "rev-parse", "HEAD") == repository_head
+    assert git(fixture.repo, "status", "--porcelain=v1") == repository_status == ""
+
+
+def test_verified_identity_cannot_be_rebound_to_another_authorization_profile(tmp_path: Path) -> None:
+    identity = disposable_prompt_repo(tmp_path).identity
+    with pytest.raises(FrontierError, match="immutable"):
+        identity.authorization_profile = replace(AUTHORIZATION, source_mutation="ALLOWED")  # type: ignore[misc]
+    with pytest.raises(FrontierError, match="immutable"):
+        identity._authorization_profile = replace(AUTHORIZATION, source_mutation="ALLOWED")  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("document", "parser"),
+    [
+        (FEATURE, FeatureManifest.from_yaml),
+        (json.dumps(state_document("a" * 40, "b" * 40)), FeatureState.from_json),
+        (POLICY, PrivacyPolicy.from_yaml),
+    ],
+)
+def test_control_document_schema_mismatch_fails_closed(document: str, parser: Any) -> None:
+    with pytest.raises(Exception, match=r"unsupported .* schema"):
+        parser(document.replace("/1.0.0", "/9.9.9", 1))
 
 
 @pytest.mark.parametrize(
@@ -484,6 +577,7 @@ def test_state_sequence_one_rejects_historical_incomplete_identity() -> None:
         FeatureState.from_json(
             json.dumps(
                 {
+                    "schema": "pulsarmlx.feature-loop-state/1.0.0",
                     "feature_id": "F017",
                     "state": "PROMPT_AVAILABLE",
                     "current_machine": "MacBook-Pro-M2-Max",

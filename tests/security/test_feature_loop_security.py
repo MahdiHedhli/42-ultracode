@@ -48,7 +48,13 @@ CONTEXTUAL = {
 
 
 def policy(category: str) -> PrivacyPolicy:
-    return PrivacyPolicy(feature_id="F017", allowed=(), prohibited=(category,), aliases={})
+    return PrivacyPolicy(
+        schema="pulsarmlx.prompt-privacy-policy/1.0.0",
+        feature_id="F017",
+        allowed=(),
+        prohibited=(category,),
+        aliases={},
+    )
 
 
 def full_scanner() -> PrivacyScanner:
@@ -57,6 +63,7 @@ def full_scanner() -> PrivacyScanner:
     markers = {category: [resolver.resolve(f"marker-{index}")] for index, category in enumerate(CONTEXTUAL)}
     return PrivacyScanner(
         PrivacyPolicy(
+            schema="pulsarmlx.prompt-privacy-policy/1.0.0",
             feature_id="F017",
             allowed=(),
             prohibited=tuple((*BUILTIN.keys(), *CONTEXTUAL.keys())),

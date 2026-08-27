@@ -2,6 +2,10 @@
 
 ## D2 Security Repair Plan
 
+0. Bind a controller-supplied typed authorization profile into the sealed prompt
+   identity, retain every authorization field, and reject schema or policy
+   mismatch before lease acquisition.
+
 1. Seal prompt verification behind `GitPromptTransport` and move lease claim
    behind direct verified-frontier arguments.
 2. Parse and verify complete parent and live-prompt identities from durable
