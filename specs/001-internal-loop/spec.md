@@ -4,8 +4,14 @@
 
 ## D2 Security Repair Addendum
 
-The verified prompt identity MUST also bind an immutable trusted authorization
-profile supplied by the controller or adapter. Prompt front matter is untrusted:
+Prompt authorization MUST be anchored by a closed adapter-owned registry. A
+caller supplies only a reviewed policy identifier; it cannot construct or
+substitute the eleven trusted values. The registry policy ID and canonical
+SHA-256 MUST be bound into sealed prompt identity and durable frontier metadata,
+and must validate before lease acquisition and on durable binding reconstruction.
+
+The verified prompt identity MUST also bind an immutable registry-selected
+authorization policy. Prompt front matter is untrusted:
 all schema, machine, phase, human-gate, repository, mutation, checkpoint,
 inference, and chat-posting fields MUST be retained and compared exactly before
 lease acquisition. Feature, state, and privacy-policy schemas MUST match their

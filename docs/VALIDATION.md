@@ -305,7 +305,13 @@ Sequence 2 additionally mutates each trusted authorization field independently,
 recomputes the untrusted prompt identity, and requires rejection before any
 lease, controller-history change, or tracked mutation. Prompt, feature, state,
 and privacy schemas are exact-version gates, and a verified identity cannot be
-rebound to a different authorization profile.
+rebound to a different authorization policy.
+
+Sequence 3 additionally requires a closed reviewed-policy registry. Tests must
+reject a matching widened prompt/profile attack, unknown policy IDs, arbitrary
+profile injection, policy copying/serialization/callback substitution, and
+policy digest mismatch before lease acquisition and during durable binding
+reconstruction.
 
 ## Evidence record
 

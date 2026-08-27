@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 from typing import NoReturn, cast
 
 from .controller import Controller, TurnClaim
@@ -404,32 +405,113 @@ _ENVELOPE_FIELDS = frozenset(
 )
 
 
-@dataclass(frozen=True)
-class PromptAuthorizationProfile:
-    """Trusted controller policy that untrusted prompt front matter must match."""
+class ReviewedPromptPolicy(StrEnum):
+    """Stable identifiers for code-reviewed, checkpoint-free prompt policies."""
 
-    schema: str
-    feature_id: str
-    machine_model: str
-    machine_architecture: str
-    phase: str
-    human_gate: str
-    source_repository: str
-    source_mutation: str
-    original_checkpoint_access: str
-    full_model_inference: str
-    automatic_chat_posting: str
+    F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR = "f017-m2-d2-policy-trust-anchor-repair-v1"
 
-    def __post_init__(self) -> None:
-        for field_name in self.__dataclass_fields__:
-            value = getattr(self, field_name)
-            if not isinstance(value, str) or not value.strip():
-                raise ManifestError(f"trusted authorization field must be non-empty: {field_name}")
-        if self.schema != PROMPT_SCHEMA:
-            raise ManifestError(f"unsupported trusted prompt schema: {self.schema}")
 
-    def values(self) -> Mapping[str, str]:
-        return {field_name: cast(str, getattr(self, field_name)) for field_name in self.__dataclass_fields__}
+_AUTHORIZATION_FIELDS = (
+    "schema",
+    "feature_id",
+    "machine_model",
+    "machine_architecture",
+    "phase",
+    "human_gate",
+    "source_repository",
+    "source_mutation",
+    "original_checkpoint_access",
+    "full_model_inference",
+    "automatic_chat_posting",
+)
+_POLICY_TOKEN = object()
+
+
+class _PromptAuthorizationPolicy:
+    """Registry-minted immutable policy; prompt callers cannot construct one."""
+
+    _sealed: bool
+    _values: Mapping[str, str]
+    policy_id: ReviewedPromptPolicy
+    sha256: str
+
+    __slots__ = ("_sealed", "_values", "policy_id", "sha256")
+
+    def __init__(
+        self,
+        policy_id: ReviewedPromptPolicy,
+        values: Mapping[str, str],
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _POLICY_TOKEN:
+            raise FrontierError("prompt policies must come from the reviewed registry")
+        if set(values) != set(_AUTHORIZATION_FIELDS):
+            raise FrontierError("reviewed prompt policy fields are incomplete")
+        normalized = {field: values[field].strip() for field in _AUTHORIZATION_FIELDS}
+        if any(not value for value in normalized.values()) or normalized["schema"] != PROMPT_SCHEMA:
+            raise FrontierError("reviewed prompt policy contains an unsupported value")
+        canonical = json.dumps(
+            {"authorization": normalized, "policy_id": policy_id.value},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        object.__setattr__(self, "policy_id", policy_id)
+        object.__setattr__(self, "sha256", sha256(canonical).hexdigest())
+        object.__setattr__(self, "_values", MappingProxyType(normalized))
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, _name: str, _value: object) -> NoReturn:
+        raise FrontierError("reviewed prompt policy is immutable")
+
+    def __copy__(self) -> NoReturn:
+        raise FrontierError("reviewed prompt policy cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> NoReturn:
+        raise FrontierError("reviewed prompt policy cannot be copied")
+
+    def __reduce__(self) -> NoReturn:
+        raise FrontierError("reviewed prompt policy cannot be serialized")
+
+    def require(self, envelope: PromptEnvelope) -> None:
+        for field_name, expected in self._values.items():
+            if getattr(envelope, field_name) != expected:
+                raise FrontierError(f"prompt authorization mismatch: {field_name}")
+
+
+def _mint_reviewed_policy(
+    policy_id: ReviewedPromptPolicy,
+    **values: str,
+) -> _PromptAuthorizationPolicy:
+    return _PromptAuthorizationPolicy(policy_id, values, _token=_POLICY_TOKEN)
+
+
+_REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = MappingProxyType(
+    {
+        ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D2-policy-trust-anchor-repair",
+            human_gate="NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
+            source_repository="MahdiHedhli/PulsarMLX",
+            source_mutation="PROHIBITED",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        )
+    }
+)
+
+
+def _resolve_reviewed_policy(policy_id: ReviewedPromptPolicy | str) -> _PromptAuthorizationPolicy:
+    try:
+        reviewed = ReviewedPromptPolicy(policy_id)
+        return _REVIEWED_POLICIES[reviewed]
+    except (KeyError, ValueError) as exc:
+        raise FrontierError("unknown reviewed prompt policy") from exc
 
 
 @dataclass(frozen=True)
@@ -453,11 +535,6 @@ class PromptEnvelope:
     full_model_inference: str
     automatic_chat_posting: str
     prompt_control_base_commit: str
-
-    def require_authorization(self, trusted: PromptAuthorizationProfile) -> None:
-        for field_name, expected in trusted.values().items():
-            if getattr(self, field_name) != expected:
-                raise FrontierError(f"prompt authorization mismatch: {field_name}")
 
     @classmethod
     def from_markdown(cls, text: str) -> PromptEnvelope:
@@ -520,13 +597,17 @@ class VerifiedPromptIdentity:
     prompt_sha256: str
     sidecar_path: str
     envelope: PromptEnvelope
-    _authorization_profile: PromptAuthorizationProfile
+    _policy: _PromptAuthorizationPolicy
     _sealed: bool
+    policy_id: str
+    policy_sha256: str
 
     __slots__ = (
-        "_authorization_profile",
+        "_policy",
         "_sealed",
         "envelope",
+        "policy_id",
+        "policy_sha256",
         "prompt_commit",
         "prompt_path",
         "prompt_sha256",
@@ -540,7 +621,7 @@ class VerifiedPromptIdentity:
         prompt_sha256: str,
         sidecar_path: str,
         envelope: PromptEnvelope,
-        authorization_profile: PromptAuthorizationProfile,
+        policy: _PromptAuthorizationPolicy,
         *,
         _token: object,
     ) -> None:
@@ -551,12 +632,10 @@ class VerifiedPromptIdentity:
         object.__setattr__(self, "prompt_sha256", prompt_sha256)
         object.__setattr__(self, "sidecar_path", sidecar_path)
         object.__setattr__(self, "envelope", envelope)
-        object.__setattr__(self, "_authorization_profile", authorization_profile)
+        object.__setattr__(self, "_policy", policy)
+        object.__setattr__(self, "policy_id", policy.policy_id.value)
+        object.__setattr__(self, "policy_sha256", policy.sha256)
         object.__setattr__(self, "_sealed", True)
-
-    @property
-    def authorization_profile(self) -> PromptAuthorizationProfile:
-        return self._authorization_profile
 
     def __setattr__(self, _name: str, _value: object) -> NoReturn:
         raise FrontierError("verified prompt identity is immutable")
@@ -643,10 +722,11 @@ class GitPromptTransport:
         prompt_path: str,
         expected_sha256: str,
         sidecar_path: str,
-        authorization_profile: PromptAuthorizationProfile,
+        policy_id: ReviewedPromptPolicy | str,
     ) -> VerifiedPromptIdentity:
         """Bind exact prompt bytes, sidecar, envelope, commit, and ancestry."""
 
+        policy = _resolve_reviewed_policy(policy_id)
         safe_prompt = validate_relative_path(prompt_path)
         safe_sidecar = validate_relative_path(sidecar_path)
         if safe_sidecar != f"{safe_prompt}.sha256":
@@ -663,7 +743,7 @@ class GitPromptTransport:
         fields = lines[0].split()
         if len(fields) != 2 or fields[0] != expected_sha256 or fields[1] != Path(safe_prompt).name:
             raise FrontierError("prompt sidecar identity mismatch")
-        envelope.require_authorization(authorization_profile)
+        policy.require(envelope)
         self.require_ancestor(envelope.prompt_control_base_commit, prompt_commit)
         return VerifiedPromptIdentity(
             safe_prompt,
@@ -671,7 +751,7 @@ class GitPromptTransport:
             expected_sha256,
             safe_sidecar,
             envelope,
-            authorization_profile,
+            policy,
             _token=_VERIFIED_PROMPT_TOKEN,
         )
 
@@ -685,6 +765,42 @@ class FrontierBinding:
     prompt_sha256: str
     response_path: str
     result_identity: str
+    policy_id: str
+    policy_sha256: str
+
+    def __post_init__(self) -> None:
+        policy = _resolve_reviewed_policy(self.policy_id)
+        if self.policy_sha256 != policy.sha256:
+            raise FrontierError("frontier policy digest mismatch")
+
+    @classmethod
+    def from_identity(cls, identity: VerifiedPromptIdentity, *, result_identity: str) -> FrontierBinding:
+        envelope = identity.envelope
+        return cls(
+            envelope.feature_id,
+            envelope.machine_model,
+            envelope.sequence,
+            identity.prompt_commit,
+            identity.prompt_sha256,
+            envelope.response_path,
+            result_identity,
+            identity.policy_id,
+            identity.policy_sha256,
+        )
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> FrontierBinding:
+        return cls(
+            feature_id=_required_string(raw, "feature_id"),
+            machine_model=_required_string(raw, "machine_model"),
+            sequence=_required_int(raw, "sequence"),
+            prompt_commit=_required_string(raw, "prompt_commit"),
+            prompt_sha256=_required_string(raw, "prompt_sha256"),
+            response_path=validate_relative_path(_required_string(raw, "response_path")),
+            result_identity=_required_string(raw, "result_identity"),
+            policy_id=_required_string(raw, "policy_id"),
+            policy_sha256=_required_string(raw, "policy_sha256"),
+        )
 
     def to_dict(self) -> JsonObject:
         payload: JsonObject = {
@@ -695,6 +811,8 @@ class FrontierBinding:
             "prompt_sha256": self.prompt_sha256,
             "response_path": self.response_path,
             "result_identity": self.result_identity,
+            "policy_id": self.policy_id,
+            "policy_sha256": self.policy_sha256,
         }
         validate_durable_payload(payload, location="frontier-binding")
         return payload
@@ -713,7 +831,10 @@ def guard_frontier(
     transport.resolve_commit(live_commit)
     transport.require_ancestor(identity.prompt_commit, live_commit)
     envelope = identity.envelope
-    envelope.require_authorization(identity.authorization_profile)
+    policy = _resolve_reviewed_policy(identity.policy_id)
+    if identity._policy is not policy or identity.policy_sha256 != policy.sha256:
+        raise FrontierError("verified prompt policy identity mismatch")
+    policy.require(envelope)
     manifest = FeatureManifest.from_yaml(transport.read(live_commit, feature_path).decode("utf-8"))
     state = FeatureState.from_json(transport.read(live_commit, state_path).decode("utf-8"))
     if manifest.status != state.state or state.state != FeatureLoopState.PROMPT_AVAILABLE.value:
@@ -1291,4 +1412,5 @@ class RepositoryFingerprint:
 def bind_frontier(controller: Controller, run_id: str, binding: FrontierBinding) -> str:
     """Persist an alias-free Feature Loop identity beside controller events."""
 
-    return controller.add_artifact(run_id, "feature-loop-binding", binding.to_dict())
+    validated = FrontierBinding.from_dict(binding.to_dict())
+    return controller.add_artifact(run_id, "feature-loop-binding", validated.to_dict())

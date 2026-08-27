@@ -2,6 +2,9 @@
 
 ## D2 Security Repair Plan
 
+0. Anchor prompt authorization in a closed reviewed-policy registry and bind
+   canonical policy identity into sealed and durable frontier records.
+
 0. Bind a controller-supplied typed authorization profile into the sealed prompt
    identity, retain every authorization field, and reject schema or policy
    mismatch before lease acquisition.

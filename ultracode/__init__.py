@@ -4,8 +4,8 @@ from .controller import Controller
 from .feature_loop import (
     FeatureManifest,
     FeatureState,
-    PromptAuthorizationProfile,
     PromptEnvelope,
+    ReviewedPromptPolicy,
     VerifiedPromptIdentity,
 )
 from .protocol import (
@@ -27,8 +27,8 @@ __all__ = [
     "FeatureManifest",
     "FeatureState",
     "Instruction",
-    "PromptAuthorizationProfile",
     "PromptEnvelope",
+    "ReviewedPromptPolicy",
     "RunSnapshot",
     "RunState",
     "VerifiedPromptIdentity",

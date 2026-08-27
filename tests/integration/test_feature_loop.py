@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import pickle
 import subprocess
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -21,10 +23,10 @@ from ultracode.feature_loop import (
     LocalAliasResolver,
     PrivacyPolicy,
     PrivacyScanner,
-    PromptAuthorizationProfile,
     PublicationCoordinator,
     PublicationError,
     PublicationRequest,
+    ReviewedPromptPolicy,
     VerifiedPromptIdentity,
     bind_frontier,
     claim_after_guards,
@@ -44,19 +46,20 @@ STATE_PATH = "Prompts/F017/STATE.json"
 PARENT = "parent response\n"
 PARENT_SHA = sha256(PARENT.encode()).hexdigest()
 
-AUTHORIZATION = PromptAuthorizationProfile(
-    schema="pulsarmlx.graph-prompt/1.0.0",
-    feature_id="F017",
-    machine_model="MacBook Pro M2 Max",
-    machine_architecture="arm64",
-    phase="Feature-Loop-D2-envelope-authorization-repair",
-    human_gate="NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
-    source_repository="MahdiHedhli/PulsarMLX",
-    source_mutation="PROHIBITED",
-    original_checkpoint_access="PROHIBITED",
-    full_model_inference="PROHIBITED",
-    automatic_chat_posting="PROHIBITED",
-)
+POLICY_ID = ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR
+AUTHORIZATION = {
+    "schema": "pulsarmlx.graph-prompt/1.0.0",
+    "feature_id": "F017",
+    "machine_model": "MacBook Pro M2 Max",
+    "machine_architecture": "arm64",
+    "phase": "Feature-Loop-D2-policy-trust-anchor-repair",
+    "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
+    "source_repository": "MahdiHedhli/PulsarMLX",
+    "source_mutation": "PROHIBITED",
+    "original_checkpoint_access": "PROHIBITED",
+    "full_model_inference": "PROHIBITED",
+    "automatic_chat_posting": "PROHIBITED",
+}
 
 FEATURE = """\
 schema: pulsarmlx.feature-loop/1.0.0
@@ -92,7 +95,7 @@ feature_id: F017
 sequence: 1
 machine_model: MacBook Pro M2 Max
 machine_architecture: arm64
-phase: Feature-Loop-D2-envelope-authorization-repair
+phase: Feature-Loop-D2-policy-trust-anchor-repair
 human_gate: NOT_REQUIRED_CHECKPOINT_FREE_REPAIR
 prompt_control_base_commit: {base_commit}
 expected_parent_response_path: {PARENT_PATH}
@@ -151,7 +154,7 @@ class PromptFixture:
             prompt_path=PROMPT_PATH,
             expected_sha256=self.prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
-            authorization_profile=AUTHORIZATION,
+            policy_id=POLICY_ID,
         )
 
 
@@ -268,15 +271,7 @@ def test_exact_prompt_sidecar_parent_and_guarded_lease(tmp_path: Path) -> None:
     bind_frontier(
         controller,
         run_id,
-        FrontierBinding(
-            "F017",
-            "MacBook Pro M2 Max",
-            1,
-            fixture.prompt_commit,
-            fixture.prompt_sha,
-            RESPONSE_PATH,
-            "result-1",
-        ),
+        FrontierBinding.from_identity(identity, result_identity="result-1"),
     )
     assert claim.worker_id == "worker"
     assert controller.get_run(run_id).state is RunState.CODEX_RUNNING
@@ -292,7 +287,7 @@ def test_wrong_prompt_hash_produces_zero_lease_claims(tmp_path: Path) -> None:
             prompt_path=PROMPT_PATH,
             expected_sha256="0" * 64,
             sidecar_path=PROMPT_SIDECAR,
-            authorization_profile=AUTHORIZATION,
+            policy_id=POLICY_ID,
         )
     assert controller.history(run_id) == before
     assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
@@ -312,7 +307,7 @@ def test_correct_bytes_at_wrong_path_or_commit_fail(tmp_path: Path) -> None:
             prompt_path="Prompts/F017/wrong.md",
             expected_sha256=fixture.prompt_sha,
             sidecar_path="Prompts/F017/wrong.md.sha256",
-            authorization_profile=AUTHORIZATION,
+            policy_id=POLICY_ID,
         )
         guard_frontier(identity=identity, transport=fixture.transport, live_commit=latest)
     with pytest.raises(FrontierError, match="absent"):
@@ -321,7 +316,7 @@ def test_correct_bytes_at_wrong_path_or_commit_fail(tmp_path: Path) -> None:
             prompt_path=PROMPT_PATH,
             expected_sha256=fixture.prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
-            authorization_profile=AUTHORIZATION,
+            policy_id=POLICY_ID,
         )
 
 
@@ -338,7 +333,7 @@ def test_malformed_missing_renamed_or_conflicting_sidecar_fails(tmp_path: Path, 
             prompt_path=PROMPT_PATH,
             expected_sha256=fixture.prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
-            authorization_profile=AUTHORIZATION,
+            policy_id=POLICY_ID,
         )
 
 
@@ -361,7 +356,7 @@ AUTHORIZATION_MUTATIONS = [
 def test_every_prompt_authorization_field_is_bound_before_lease(tmp_path: Path, field: str, replacement: str) -> None:
     fixture = disposable_prompt_repo(tmp_path)
     prompt = (fixture.repo / PROMPT_PATH).read_text()
-    prompt = prompt.replace(f"{field}: {getattr(AUTHORIZATION, field)}", f"{field}: {replacement}", 1)
+    prompt = prompt.replace(f"{field}: {AUTHORIZATION[field]}", f"{field}: {replacement}", 1)
     prompt_sha = sha256(prompt.encode()).hexdigest()
     (fixture.repo / PROMPT_PATH).write_text(prompt)
     (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
@@ -384,7 +379,7 @@ def test_every_prompt_authorization_field_is_bound_before_lease(tmp_path: Path, 
             prompt_path=PROMPT_PATH,
             expected_sha256=prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
-            authorization_profile=AUTHORIZATION,
+            policy_id=POLICY_ID,
         )
 
     assert controller.history(run_id) == history
@@ -393,12 +388,105 @@ def test_every_prompt_authorization_field_is_bound_before_lease(tmp_path: Path, 
     assert git(fixture.repo, "status", "--porcelain=v1") == repository_status == ""
 
 
-def test_verified_identity_cannot_be_rebound_to_another_authorization_profile(tmp_path: Path) -> None:
+def test_verified_identity_cannot_be_rebound_to_another_authorization_policy(tmp_path: Path) -> None:
     identity = disposable_prompt_repo(tmp_path).identity
     with pytest.raises(FrontierError, match="immutable"):
-        identity.authorization_profile = replace(AUTHORIZATION, source_mutation="ALLOWED")  # type: ignore[misc]
+        identity.policy_id = "attacker-policy"  # type: ignore[misc]
     with pytest.raises(FrontierError, match="immutable"):
-        identity._authorization_profile = replace(AUTHORIZATION, source_mutation="ALLOWED")  # type: ignore[misc]
+        identity.policy_sha256 = "0" * 64  # type: ignore[misc]
+
+
+def test_unknown_policy_and_public_profile_injection_fail_before_lease(tmp_path: Path) -> None:
+    fixture = disposable_prompt_repo(tmp_path)
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    with pytest.raises(FrontierError, match="unknown reviewed prompt policy"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit="not-a-commit",
+            prompt_path="not/a/prompt.md",
+            expected_sha256="0" * 64,
+            sidecar_path="not/a/prompt.md.sha256",
+            policy_id="attacker-policy",
+        )
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        fixture.transport.verify_prompt_identity(  # type: ignore[call-arg]
+            prompt_commit=fixture.prompt_commit,
+            prompt_path=PROMPT_PATH,
+            expected_sha256=fixture.prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            authorization_profile=object(),
+        )
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+
+
+def test_matching_widened_prompt_cannot_mint_matching_policy(tmp_path: Path) -> None:
+    fixture = disposable_prompt_repo(tmp_path)
+    prompt = (fixture.repo / PROMPT_PATH).read_text()
+    replacements = {
+        "human_gate": "AUTOMATIC_EVENT_06_AUTHORITY",
+        "source_mutation": "ALLOWED",
+        "original_checkpoint_access": "ALLOWED",
+        "full_model_inference": "ALLOWED",
+        "automatic_chat_posting": "ALLOWED",
+    }
+    for field, replacement in replacements.items():
+        prompt = prompt.replace(f"{field}: {AUTHORIZATION[field]}", f"{field}: {replacement}", 1)
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", "matching widened prompt")
+    prompt_commit = git(fixture.repo, "rev-parse", "HEAD")
+    state = json.loads((fixture.repo / STATE_PATH).read_text())
+    state["latest_prompt"] = {"path": PROMPT_PATH, "sha256": prompt_sha, "commit": prompt_commit}
+    (fixture.repo / STATE_PATH).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    git(fixture.repo, "add", STATE_PATH)
+    git(fixture.repo, "commit", "-qm", "matching widened frontier")
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    head = git(fixture.repo, "rev-parse", "HEAD")
+    with pytest.raises(FrontierError, match="authorization mismatch"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=prompt_commit,
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=POLICY_ID,
+        )
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+    assert git(fixture.repo, "rev-parse", "HEAD") == head
+    assert git(fixture.repo, "status", "--porcelain=v1") == ""
+
+
+def test_policy_identity_is_durable_and_registry_policy_rejects_serialization(tmp_path: Path) -> None:
+    fixture = disposable_prompt_repo(tmp_path)
+    identity = fixture.identity
+    binding = FrontierBinding.from_identity(identity, result_identity="result-1")
+    assert FrontierBinding.from_dict(binding.to_dict()) == binding
+    assert binding.policy_id == identity.policy_id == POLICY_ID.value
+    assert binding.policy_sha256 == "d0187ae426b82d676c5cb370be669f58e17b75eae4036597a758d40c6949446b"
+    with pytest.raises(FrontierError, match="digest mismatch"):
+        replace(binding, policy_sha256="0" * 64)
+    policy = identity._policy
+    with pytest.raises(FrontierError, match="copied"):
+        copy.copy(policy)
+    with pytest.raises(FrontierError, match="copied"):
+        copy.deepcopy(policy)
+    with pytest.raises(FrontierError, match="serialized"):
+        pickle.dumps(policy)
+    with pytest.raises(TypeError):
+        json.dumps(policy)
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        fixture.transport.verify_prompt_identity(  # type: ignore[call-arg]
+            prompt_commit=fixture.prompt_commit,
+            prompt_path=PROMPT_PATH,
+            expected_sha256=fixture.prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=POLICY_ID,
+            policy_resolver=lambda _policy_id: policy,
+        )
 
 
 @pytest.mark.parametrize(
