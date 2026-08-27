@@ -1,0 +1,29 @@
+{
+  "automation_level": "C",
+  "checkpoint_access": "NONE",
+  "controller_events": 11,
+  "dogfood_final_state": "COMPLETE",
+  "dogfood_iterations": 2,
+  "event_05_retry_or_resume": "NONE",
+  "event_06_execution_or_launch": "NONE",
+  "feature_id": "F017",
+  "full_model_inference": "NONE",
+  "manual_prompt_copy_count": 0,
+  "machine_model": "MacBook Pro M2 Max",
+  "original_checkpoint_root_resolved": false,
+  "prompt_commit": "c2e48c119d1ab37ee9e030807fb2745ff1f56f1c",
+  "prompt_sha256": "a4f48cdd95350eac0e80cad3396faa988bdfa1c5c56446f05424a4e22d67b207",
+  "pulsarmlx_isolation": "REMOTE_BARE_OBJECT_SNAPSHOT_ONLY",
+  "pulsarmlx_source_mutation": "NONE",
+  "restart_reconstructed": true,
+  "sequence": 1,
+  "subscription_transport_probe": "NOT_RERUN_TRANSPORT_BOUNDARY_UNCHANGED",
+  "tests": {
+    "dogfood": "PASS",
+    "mypy": "PASS",
+    "pytest": "184 passed",
+    "ruff_format": "PASS",
+    "ruff_lint": "PASS",
+    "uv_sync": "PASS"
+  }
+}

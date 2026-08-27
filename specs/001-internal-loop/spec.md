@@ -2,6 +2,25 @@
 
 **Feature Branch**: `001-internal-loop`
 
+## D2 Security Repair Addendum
+
+Sequence 1 and later MUST acquire a worker lease only from a sealed prompt
+identity that binds exact Git commit, repository-relative path, calculated
+SHA-256, adjacent basename sidecar, parsed envelope, and control-base ancestry.
+The live state MUST bind the complete parent response identity and agree with
+the feature manifest on protocol status and machine sequence.
+
+Resolved machine-local aliases are transport capabilities, not data records.
+They MUST reject default serialization, copying, and pickling, and recursive
+durable-payload validation MUST reject them at any depth. Privacy policy
+construction MUST fail when a prohibited category lacks either a reviewed
+structural detector or a non-serializable machine-local marker provider.
+
+Feature and state projection MUST compare both expected live hashes before
+writing and MUST be committed together as the atomic Git boundary. Complete
+staged publication diffs remain subject to fail-closed automated scanning and
+manual review.
+
 **Created**: 2026-08-14
 
 **Status**: Implemented and dogfood-validated

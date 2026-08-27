@@ -295,6 +295,12 @@ privacy-category, checkpoint-denial, no-source-mutation, deterministic
 publication, and transport-only retry coverage. Real aliases and checkpoint
 roots must not be used by automated tests.
 
+For the D2 security repair, additionally require adversarial tests for exact
+prompt/sidecar identity, complete parent identity, alias non-serialization,
+compiled privacy-category coverage, complete staged-diff scanning, and paired
+feature/state expected-hash races. Publication is not accepted until both
+control documents are staged and committed together.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

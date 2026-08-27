@@ -1,5 +1,18 @@
 # Implementation Plan: Internal ChatGPT/Codex Loop
 
+## D2 Security Repair Plan
+
+1. Seal prompt verification behind `GitPromptTransport` and move lease claim
+   behind direct verified-frontier arguments.
+2. Parse and verify complete parent and live-prompt identities from durable
+   state for sequence 1 and later.
+3. Replace resolved-alias records with non-serializable capabilities and add
+   recursive durable-payload rejection.
+4. Compile privacy policy coverage, require private contextual markers, and
+   scan the complete staged publication diff.
+5. Project feature and state together with expected-hash race checks and
+   deterministic interruption recovery.
+
 **Branch**: `001-internal-loop` | **Date**: 2026-08-14 | **Spec**:
 [spec.md](spec.md)
 

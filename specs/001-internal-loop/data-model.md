@@ -69,6 +69,26 @@ lease automatically.
 
 ## Feature Loop frontier binding
 
+### Verified prompt identity
+
+The verified identity is a sealed in-memory capability containing the exact
+prompt commit, repository-relative path, calculated SHA-256, adjacent sidecar,
+parsed envelope, and proven control-base ancestry. It is created only by the
+Git transport and is required directly by lease acquisition.
+
+### Durable parent identity
+
+For sequence 1 and later, `latest_response` includes path, SHA-256, status,
+machine model, sequence, and commit. `latest_prompt` includes path, SHA-256,
+and commit. Missing or mismatched fields fail closed.
+
+### Resolved alias capability
+
+A resolved alias has no dataclass fields or instance dictionary and refuses
+JSON encoding, generic conversion, copying, and pickling. Only its explicit
+transport method can reveal the private value; it is invalid in all durable
+payloads.
+
 | Field | Meaning |
 | --- | --- |
 | `feature_id`, `machine_model`, `sequence` | Exact planner-issued frontier. |

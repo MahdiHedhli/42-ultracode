@@ -222,12 +222,55 @@ class FeatureManifest:
 
 
 @dataclass(frozen=True)
+class LatestResponse:
+    path: str
+    sha256: str | None
+    status: str | None
+    machine_model: str | None
+    sequence: int | None
+    commit: str | None
+
+    @property
+    def complete(self) -> bool:
+        return all(
+            value is not None for value in (self.sha256, self.status, self.machine_model, self.sequence, self.commit)
+        )
+
+
+@dataclass(frozen=True)
+class LatestPrompt:
+    path: str
+    sha256: str
+    commit: str
+
+
+def _optional_string(data: Mapping[str, object], key: str) -> str | None:
+    if key not in data:
+        return None
+    return _required_string(data, key)
+
+
+def _optional_nonnegative_int(data: Mapping[str, object], key: str) -> int | None:
+    if key not in data:
+        return None
+    value = _required_int(data, key)
+    if value < 0:
+        raise ManifestError(f"{key} must be non-negative")
+    return value
+
+
+@dataclass(frozen=True)
 class FeatureState:
     feature_id: str
     state: str
     current_machine: str
     current_sequence: int
-    latest_response_path: str | None
+    latest_response: LatestResponse | None
+    latest_prompt: LatestPrompt | None
+
+    @property
+    def latest_response_path(self) -> str | None:
+        return self.latest_response.path if self.latest_response is not None else None
 
     @classmethod
     def from_json(cls, text: str) -> FeatureState:
@@ -238,20 +281,53 @@ class FeatureState:
         if not isinstance(raw, dict):
             raise ManifestError("STATE.json root must be an object")
         latest = raw.get("latest_response")
-        latest_path: str | None = None
+        latest_response: LatestResponse | None = None
         if latest is not None:
             if not isinstance(latest, dict):
                 raise ManifestError("latest_response must be an object or null")
-            latest_path = validate_relative_path(_required_string(latest, "path"))
+            latest_sha = _optional_string(latest, "sha256")
+            if latest_sha is not None and not _SHA256.fullmatch(latest_sha):
+                raise ManifestError("latest_response.sha256 is invalid")
+            latest_commit = _optional_string(latest, "commit")
+            if latest_commit is not None and not _COMMIT.fullmatch(latest_commit):
+                raise ManifestError("latest_response.commit is invalid")
+            latest_response = LatestResponse(
+                path=validate_relative_path(_required_string(latest, "path")),
+                sha256=latest_sha,
+                status=_optional_string(latest, "status"),
+                machine_model=_optional_string(latest, "machine_model"),
+                sequence=_optional_nonnegative_int(latest, "sequence"),
+                commit=latest_commit,
+            )
         sequence = _required_int(raw, "current_sequence")
         if sequence < 0:
             raise ManifestError("current_sequence must be non-negative")
+        latest_prompt_raw = raw.get("latest_prompt")
+        latest_prompt: LatestPrompt | None = None
+        if latest_prompt_raw is not None:
+            if not isinstance(latest_prompt_raw, dict):
+                raise ManifestError("latest_prompt must be an object or null")
+            prompt_sha = _required_string(latest_prompt_raw, "sha256")
+            prompt_commit = _required_string(latest_prompt_raw, "commit")
+            if not _SHA256.fullmatch(prompt_sha) or not _COMMIT.fullmatch(prompt_commit):
+                raise ManifestError("latest_prompt identity is invalid")
+            latest_prompt = LatestPrompt(
+                path=validate_relative_path(_required_string(latest_prompt_raw, "path")),
+                sha256=prompt_sha,
+                commit=prompt_commit,
+            )
+        if sequence >= 1:
+            if latest_response is None or not latest_response.complete:
+                raise ManifestError("sequence 1+ requires complete latest_response identity")
+            if latest_prompt is None:
+                raise ManifestError("sequence 1+ requires complete latest_prompt identity")
         return cls(
             feature_id=_required_string(raw, "feature_id"),
             state=_required_string(raw, "state"),
             current_machine=_required_string(raw, "current_machine"),
             current_sequence=sequence,
-            latest_response_path=latest_path,
+            latest_response=latest_response,
+            latest_prompt=latest_prompt,
         )
 
 
@@ -320,6 +396,7 @@ class PromptEnvelope:
     response_checksum_path: str
     handoff_path: str
     source_repository: str
+    prompt_control_base_commit: str
 
     @classmethod
     def from_markdown(cls, text: str) -> PromptEnvelope:
@@ -359,7 +436,53 @@ class PromptEnvelope:
             response_checksum_path=validate_relative_path(_required_string(raw, "response_checksum_path")),
             handoff_path=validate_relative_path(_required_string(raw, "handoff_path")),
             source_repository=_required_string(raw, "source_repository"),
+            prompt_control_base_commit=base,
         )
+
+
+_VERIFIED_PROMPT_TOKEN = object()
+
+
+class VerifiedPromptIdentity:
+    """Sealed identity produced only after exact Git prompt verification."""
+
+    prompt_path: str
+    prompt_commit: str
+    prompt_sha256: str
+    sidecar_path: str
+    envelope: PromptEnvelope
+    _sealed: bool
+
+    __slots__ = (
+        "_sealed",
+        "envelope",
+        "prompt_commit",
+        "prompt_path",
+        "prompt_sha256",
+        "sidecar_path",
+    )
+
+    def __init__(
+        self,
+        prompt_path: str,
+        prompt_commit: str,
+        prompt_sha256: str,
+        sidecar_path: str,
+        envelope: PromptEnvelope,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _VERIFIED_PROMPT_TOKEN:
+            raise FrontierError("verified prompt identities must come from GitPromptTransport")
+        object.__setattr__(self, "prompt_path", prompt_path)
+        object.__setattr__(self, "prompt_commit", prompt_commit)
+        object.__setattr__(self, "prompt_sha256", prompt_sha256)
+        object.__setattr__(self, "sidecar_path", sidecar_path)
+        object.__setattr__(self, "envelope", envelope)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, _name: str, _value: object) -> NoReturn:
+        raise FrontierError("verified prompt identity is immutable")
 
 
 class GitPromptTransport:
@@ -436,6 +559,42 @@ class GitPromptTransport:
         if completed.returncode:
             raise FrontierError("prompt commit does not descend from required control commit")
 
+    def verify_prompt_identity(
+        self,
+        *,
+        prompt_commit: str,
+        prompt_path: str,
+        expected_sha256: str,
+        sidecar_path: str,
+    ) -> VerifiedPromptIdentity:
+        """Bind exact prompt bytes, sidecar, envelope, commit, and ancestry."""
+
+        safe_prompt = validate_relative_path(prompt_path)
+        safe_sidecar = validate_relative_path(sidecar_path)
+        if safe_sidecar != f"{safe_prompt}.sha256":
+            raise FrontierError("prompt sidecar must be adjacent to the prompt")
+        prompt = self.verify_sha256(prompt_commit, safe_prompt, expected_sha256)
+        try:
+            envelope = PromptEnvelope.from_markdown(prompt.decode("utf-8", errors="strict"))
+            sidecar = self.read(prompt_commit, safe_sidecar).decode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise FrontierError("prompt or sidecar is not UTF-8") from exc
+        lines = sidecar.splitlines()
+        if len(lines) != 1:
+            raise FrontierError("prompt sidecar must contain exactly one line")
+        fields = lines[0].split()
+        if len(fields) != 2 or fields[0] != expected_sha256 or fields[1] != Path(safe_prompt).name:
+            raise FrontierError("prompt sidecar identity mismatch")
+        self.require_ancestor(envelope.prompt_control_base_commit, prompt_commit)
+        return VerifiedPromptIdentity(
+            safe_prompt,
+            prompt_commit,
+            expected_sha256,
+            safe_sidecar,
+            envelope,
+            _token=_VERIFIED_PROMPT_TOKEN,
+        )
+
 
 @dataclass(frozen=True)
 class FrontierBinding:
@@ -448,7 +607,7 @@ class FrontierBinding:
     result_identity: str
 
     def to_dict(self) -> JsonObject:
-        return {
+        payload: JsonObject = {
             "feature_id": self.feature_id,
             "machine_model": self.machine_model,
             "sequence": self.sequence,
@@ -457,24 +616,29 @@ class FrontierBinding:
             "response_path": self.response_path,
             "result_identity": self.result_identity,
         }
+        validate_durable_payload(payload, location="frontier-binding")
+        return payload
 
 
 def guard_frontier(
     *,
-    envelope: PromptEnvelope,
-    prompt_commit: str,
-    prompt_sha256: str,
-    manifest: FeatureManifest,
-    state: FeatureState,
+    identity: VerifiedPromptIdentity,
     transport: GitPromptTransport,
     live_commit: str,
+    feature_path: str = "Prompts/F017/FEATURE.yaml",
+    state_path: str = "Prompts/F017/STATE.json",
 ) -> None:
     """Require the exact feature/machine/sequence frontier before lease claim."""
 
-    transport.resolve_commit(prompt_commit)
     transport.resolve_commit(live_commit)
-    if not _SHA256.fullmatch(prompt_sha256):
-        raise FrontierError("prompt SHA-256 is invalid")
+    transport.require_ancestor(identity.prompt_commit, live_commit)
+    envelope = identity.envelope
+    manifest = FeatureManifest.from_yaml(transport.read(live_commit, feature_path).decode("utf-8"))
+    state = FeatureState.from_json(transport.read(live_commit, state_path).decode("utf-8"))
+    if manifest.status != state.state or state.state != FeatureLoopState.PROMPT_AVAILABLE.value:
+        raise FrontierError("feature and state protocol status mismatch")
+    if manifest.state_file != validate_relative_path(state_path):
+        raise FrontierError("feature state path mismatch")
     if envelope.feature_id != manifest.feature_id or envelope.feature_id != state.feature_id:
         raise FrontierError("feature identity mismatch")
     expected_sequence = manifest.machine_sequences.get(envelope.machine_slug)
@@ -482,17 +646,35 @@ def guard_frontier(
         raise FrontierError("feature manifest machine sequence mismatch")
     if state.current_machine != envelope.machine_slug or state.current_sequence != envelope.sequence:
         raise FrontierError("STATE.json machine frontier mismatch")
-    if state.latest_response_path != envelope.expected_parent_response_path:
+    if state.latest_prompt is None or (
+        state.latest_prompt.path != identity.prompt_path
+        or state.latest_prompt.commit != identity.prompt_commit
+        or state.latest_prompt.sha256 != identity.prompt_sha256
+    ):
+        raise FrontierError("live state prompt identity mismatch")
+    parent_identity = state.latest_response
+    if parent_identity is None or parent_identity.path != envelope.expected_parent_response_path:
         raise FrontierError("expected parent response does not match STATE.json")
+    if parent_identity.sha256 != envelope.expected_parent_response_sha256:
+        raise FrontierError("expected parent response SHA-256 does not match STATE.json")
+    if not parent_identity.complete:
+        raise FrontierError("expected parent response identity is incomplete")
+    assert parent_identity.commit is not None
+    assert parent_identity.sequence is not None
+    if parent_identity.sequence != envelope.sequence - 1:
+        raise FrontierError("expected parent response sequence mismatch")
+    if parent_identity.machine_model != envelope.machine_model or parent_identity.status != "PASS":
+        raise FrontierError("expected parent response machine or status mismatch")
+    transport.require_ancestor(parent_identity.commit, live_commit)
     parent = transport.verify_sha256(
-        prompt_commit,
+        parent_identity.commit,
         envelope.expected_parent_response_path,
         envelope.expected_parent_response_sha256,
     )
     if not parent:
         raise FrontierError("expected parent response is empty")
-    for path in (envelope.response_path, envelope.handoff_path):
-        if transport.exists(prompt_commit, path) or transport.exists(live_commit, path):
+    for path in (envelope.response_path, envelope.response_checksum_path, envelope.handoff_path):
+        if transport.exists(identity.prompt_commit, path) or transport.exists(live_commit, path):
             raise FrontierError(f"terminal artifact already exists: {path}")
 
 
@@ -502,11 +684,13 @@ def claim_after_guards(
     run_id: str,
     worker_id: str,
     idempotency_key: str,
-    guard: Callable[[], None],
+    identity: VerifiedPromptIdentity,
+    transport: GitPromptTransport,
+    live_commit: str,
 ) -> TurnClaim:
     """Acquire the existing controller lease only after all Git guards pass."""
 
-    guard()
+    guard_frontier(identity=identity, transport=transport, live_commit=live_commit)
     return controller.claim_turn(
         run_id,
         worker_id=worker_id,
@@ -514,13 +698,24 @@ def claim_after_guards(
     )
 
 
-@dataclass(frozen=True)
 class ResolvedAlias:
-    alias: str
-    _value: str
+    """Transport capability that refuses every default serialization route."""
+
+    _alias: str
+    __value: str
+
+    __slots__ = ("__value", "_alias")
+
+    def __init__(self, alias: str, value: str) -> None:
+        object.__setattr__(self, "_alias", alias)
+        object.__setattr__(self, "_ResolvedAlias__value", value)
+
+    @property
+    def alias(self) -> str:
+        return self._alias
 
     def reveal_for_transport(self) -> str:
-        return self._value
+        return self.__value
 
     def __str__(self) -> str:
         return self.alias
@@ -528,12 +723,33 @@ class ResolvedAlias:
     def __repr__(self) -> str:
         return f"ResolvedAlias(alias={self.alias!r})"
 
+    def __copy__(self) -> NoReturn:
+        raise FeatureLoopError("resolved aliases cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> NoReturn:
+        raise FeatureLoopError("resolved aliases cannot be copied")
+
+    def __reduce__(self) -> NoReturn:
+        raise FeatureLoopError("resolved aliases cannot be pickled")
+
+    def __reduce_ex__(self, _protocol: object) -> NoReturn:
+        raise FeatureLoopError("resolved aliases cannot be pickled")
+
 
 class LocalAliasResolver:
     """Resolve private aliases in memory while denying prohibited capabilities."""
 
     def __init__(self, values: Mapping[str, str], *, denied: Sequence[str] = ()) -> None:
-        self._values = dict(values)
+        cleaned: dict[str, str] = {}
+        for alias, value in values.items():
+            if not alias.strip() or not value.strip():
+                raise FeatureLoopError("alias names and values must be non-empty")
+            cleaned[alias] = value
+        if len(set(cleaned.values())) != len(cleaned):
+            raise FeatureLoopError("alias values are ambiguous")
+        if any(value in cleaned for value in cleaned.values()):
+            raise FeatureLoopError("alias configuration is circular or alias-name-only")
+        self._values = cleaned
         self._denied = frozenset(denied)
         self.requests: list[str] = []
 
@@ -545,6 +761,26 @@ class LocalAliasResolver:
         if value is None:
             raise FeatureLoopError(f"alias is unavailable: {alias}")
         return ResolvedAlias(alias, value)
+
+
+def validate_durable_payload(value: object, *, location: str = "$") -> None:
+    """Reject capabilities and unsupported objects before durable serialization."""
+
+    if isinstance(value, ResolvedAlias):
+        raise FeatureLoopError(f"resolved alias prohibited in durable payload at {location}")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise FeatureLoopError(f"durable payload key is not text at {location}")
+            validate_durable_payload(item, location=f"{location}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            validate_durable_payload(item, location=f"{location}[{index}]")
+        return
+    raise FeatureLoopError(f"unsupported durable payload object at {location}: {type(value).__name__}")
 
 
 _BUILTIN_PRIVACY_PATTERNS: Mapping[str, re.Pattern[str]] = {
@@ -563,16 +799,45 @@ _BUILTIN_PRIVACY_PATTERNS: Mapping[str, re.Pattern[str]] = {
     ),
 }
 
+_CONTEXTUAL_PRIVACY_CATEGORIES = frozenset(
+    {
+        "personal-names",
+        "local-usernames",
+        "hostnames",
+        "serial-numbers",
+        "actual-notification-topic-names",
+        "unrelated-client-tenant-or-lab-topology",
+    }
+)
+
 
 class PrivacyScanner:
     def __init__(
         self,
         policy: PrivacyPolicy,
         *,
-        category_markers: Mapping[str, Sequence[str]] | None = None,
+        category_markers: Mapping[str, Sequence[ResolvedAlias]] | None = None,
     ) -> None:
         self.policy = policy
-        self.category_markers = {key: tuple(values) for key, values in (category_markers or {}).items()}
+        supplied = {key: tuple(values) for key, values in (category_markers or {}).items()}
+        unknown_supplied = set(supplied) - set(policy.prohibited)
+        if unknown_supplied:
+            raise PrivacyError(f"privacy markers supplied for non-prohibited categories: {sorted(unknown_supplied)}")
+        seen_values: set[str] = set()
+        for category in policy.prohibited:
+            if category not in _BUILTIN_PRIVACY_PATTERNS and category not in _CONTEXTUAL_PRIVACY_CATEGORIES:
+                raise PrivacyError(f"privacy category has no detector: {category}")
+            markers = supplied.get(category, ())
+            if category in _CONTEXTUAL_PRIVACY_CATEGORIES and not markers:
+                raise PrivacyError(f"privacy category requires private marker provider: {category}")
+            for marker in markers:
+                if not isinstance(marker, ResolvedAlias):
+                    raise PrivacyError(f"privacy marker must be a resolved capability: {category}")
+                value = marker.reveal_for_transport()
+                if not value.strip() or value == marker.alias or value in seen_values:
+                    raise PrivacyError(f"privacy marker is blank, circular, or ambiguous: {category}")
+                seen_values.add(value)
+        self.category_markers = supplied
 
     def scan(self, text: str) -> None:
         for category in self.policy.prohibited:
@@ -580,8 +845,29 @@ class PrivacyScanner:
             if pattern is not None and pattern.search(text):
                 raise PrivacyError(f"privacy category detected: {category}")
             for marker in self.category_markers.get(category, ()):
-                if marker and marker in text:
+                if marker.reveal_for_transport() in text:
                     raise PrivacyError(f"privacy category detected: {category}")
+
+    def scan_staged_diff(self, repository: str | Path) -> None:
+        root = str(Path(repository).resolve())
+        names = subprocess.run(
+            ["git", "-C", root, "diff", "--cached", "--name-only", "--no-ext-diff"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        )
+        diff = subprocess.run(
+            ["git", "-C", root, "diff", "--cached", "--unified=0", "--no-ext-diff", "--no-color", "--text"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        )
+        if names.returncode or diff.returncode:
+            raise PrivacyError("unable to inspect complete staged publication diff")
+        added = [line[1:] for line in diff.stdout.splitlines() if line.startswith("+") and not line.startswith("+++")]
+        self.scan(f"{names.stdout}\n" + "\n".join(added))
 
 
 class FeatureLoopState(StrEnum):
@@ -611,6 +897,9 @@ class PublicationRequest:
     result_identity: str
     state_document: JsonObject
     expected_state_sha256: str
+    feature_path: str
+    feature_document: str
+    expected_feature_sha256: str
 
 
 @dataclass(frozen=True)
@@ -691,6 +980,46 @@ class PublicationCoordinator:
                 temporary.unlink()
             raise
 
+    @staticmethod
+    def _project_feature_document(document: str, *, status: str, machine_slug: str, sequence: int) -> bytes:
+        before = FeatureManifest.from_yaml(document)
+        lines = document.splitlines(keepends=True)
+        status_hits = 0
+        sequence_hits = 0
+        in_sequences = False
+        projected: list[str] = []
+        for line in lines:
+            if line.startswith("status:"):
+                line = f"status: {status}\n"
+                status_hits += 1
+            if line.startswith("latest_machine_sequence:"):
+                in_sequences = True
+            elif in_sequences and line and not line.startswith("  "):
+                in_sequences = False
+            if in_sequences and line.startswith(f"  {machine_slug}:"):
+                line = f"  {machine_slug}: {sequence}\n"
+                sequence_hits += 1
+            projected.append(line)
+        if status_hits != 1 or sequence_hits != 1:
+            raise PublicationError("feature document cannot be projected deterministically")
+        result = "".join(projected)
+        after = FeatureManifest.from_yaml(result)
+        if after.feature_id != before.feature_id or after.state_file != before.state_file:
+            raise PublicationError("feature projection changed immutable identity")
+        if after.status != status or after.machine_sequences.get(machine_slug) != sequence:
+            raise PublicationError("feature projection failed")
+        return result.encode("utf-8")
+
+    @staticmethod
+    def _require_expected(path: Path, content: bytes, expected_sha256: str) -> None:
+        if not _SHA256.fullmatch(expected_sha256):
+            raise PublicationError("expected control-document SHA-256 is malformed")
+        if not path.is_file() or path.is_symlink():
+            raise PublicationError("expected control document is absent or unsafe")
+        current = path.read_bytes()
+        if current != content and sha256(current).hexdigest() != expected_sha256:
+            raise PublicationError("control-document frontier changed before publication")
+
     def prepare(
         self,
         request: PublicationRequest,
@@ -727,7 +1056,6 @@ class PublicationCoordinator:
         state["state"] = FeatureLoopState.CHAT_HANDOFF_PENDING.value
         state["current_machine"] = request.machine_model.replace(" ", "-")
         state["current_sequence"] = request.sequence
-        state["dogfood_stage"] = "SUPERVISED_CHAT_HANDOFF"
         state["latest_prompt"] = {
             "path": validate_relative_path(request.prompt_path),
             "commit": request.prompt_commit,
@@ -738,7 +1066,19 @@ class PublicationCoordinator:
             "sha256": response_hash,
             "status": request.status,
             "result_identity": request.result_identity,
+            "commit": request.response_commit,
+            "machine_model": request.machine_model,
+            "sequence": request.sequence,
         }
+        feature_bytes = self._project_feature_document(
+            request.feature_document,
+            status=FeatureLoopState.CHAT_HANDOFF_PENDING.value,
+            machine_slug=request.machine_model.replace(" ", "-"),
+            sequence=request.sequence,
+        )
+        state_bytes = (json.dumps(state, indent=2, sort_keys=True) + "\n").encode()
+        validate_durable_payload(handoff, location="handoff")
+        validate_durable_payload(state, location="state")
         payloads = (
             ("response", self._target(request.response_path), response_bytes),
             ("checksum", self._target(request.checksum_path), checksum_bytes),
@@ -747,13 +1087,20 @@ class PublicationCoordinator:
                 self._target(request.handoff_path),
                 (json.dumps(handoff, indent=2, sort_keys=True) + "\n").encode(),
             ),
-            ("state", self._target(request.state_path), (json.dumps(state, indent=2, sort_keys=True) + "\n").encode()),
+            ("feature", self._target(request.feature_path), feature_bytes),
+            ("state", self._target(request.state_path), state_bytes),
         )
         for _name, _path, content in payloads:
             self.scanner.scan(content.decode("utf-8"))
+        feature_target = self._target(request.feature_path)
+        state_target = self._target(request.state_path)
+        self._require_expected(feature_target, feature_bytes, request.expected_feature_sha256)
+        self._require_expected(state_target, state_bytes, request.expected_state_sha256)
         completed: list[str] = []
         for name, path, content in payloads:
-            if name == "state":
+            if name == "feature":
+                self._replace_expected(path, content, request.expected_feature_sha256)
+            elif name == "state":
                 self._replace_expected(path, content, request.expected_state_sha256)
             else:
                 self._write_once(path, content)
@@ -812,13 +1159,15 @@ def notification_record(
         transport(resolved.reveal_for_transport(), message)
     except Exception:
         status = "FAIL"
-    return {
+    record: JsonObject = {
         "topic_alias": alias,
         "status": status,
         "feature_id": feature_id,
         "sequence": sequence,
         "artifact_identity": artifact_identity,
     }
+    validate_durable_payload(record, location="notification")
+    return record
 
 
 @dataclass(frozen=True)

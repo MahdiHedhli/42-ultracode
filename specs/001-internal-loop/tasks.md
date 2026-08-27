@@ -4,6 +4,15 @@ description: "Actionable implementation tasks for 001-internal-loop"
 
 # Tasks: Internal ChatGPT/Codex Loop
 
+## D2 Security Repair
+
+- [x] D2R-1 Bind prompt bytes, sidecar, path, commit, envelope, and ancestry before lease acquisition.
+- [x] D2R-2 Verify complete expected-parent and live-frontier identities.
+- [x] D2R-3 Make resolved aliases non-serializable and reject them recursively from durable payloads.
+- [x] D2R-4 Compile privacy coverage fail-closed and scan staged publication diffs.
+- [x] D2R-5 Project feature/state atomically at the Git boundary with expected-hash race checks.
+- [x] D2R-6 Run adversarial regressions, full quality gate, dogfood, privacy review, and no-source-mutation round trip.
+
 **Input**: Design documents in `specs/001-internal-loop/`
 
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, and
