@@ -220,3 +220,31 @@ remains.
   copied between planner and executor.
 - A public license has not been selected; this is recorded as a pre-release
   decision rather than inferred.
+
+## Feature Loop Protocol v1 adapter extension
+
+The v0.1 controller MAY be wrapped by a thin Git artifact adapter for a bounded
+Feature Loop dogfood. The adapter MUST preserve controller-owned events, replay,
+leases, idempotency, lifecycle, role separation, and iteration ceilings.
+
+- **FR-014**: The adapter MUST parse the feature manifest, feature state,
+  privacy policy, and prompt envelope strictly and fail closed on malformed or
+  ambiguous input.
+- **FR-015**: An exact prompt commit, path, SHA-256, expected parent, feature,
+  machine, sequence, and duplicate-artifact frontier MUST pass before a worker
+  lease can be claimed.
+- **FR-016**: Resolved local aliases MUST remain process-local and MUST NOT be
+  serializable into events, logs intended for publication, feature state,
+  notifications, responses, or handoffs.
+- **FR-017**: Response, checksum, allowlisted handoff, and feature state MUST be
+  prepared in deterministic order with resumable transport-only failure
+  semantics. A publication, notification, or handoff retry MUST NOT repeat a
+  durable worker result.
+- **FR-018**: A policy-driven privacy scan MUST reject every prohibited
+  identifier category before publication.
+- **FR-019**: The first F017 dogfood round trip MUST expose no PulsarMLX write
+  capability and MUST deny resolution of `CHECKPOINT_ROOT`.
+
+This extension does not add automatic ChatGPT posting, cloud queues, a generic
+workflow engine, checkpoint access, source-repository mutation, or a new
+controller state machine.

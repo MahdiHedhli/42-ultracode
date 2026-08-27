@@ -67,6 +67,19 @@ storage needed for a safe retry; it is deliberately excluded from immutable
 events and history responses. A resumed paused worker never regains a stale
 lease automatically.
 
+## Feature Loop frontier binding
+
+| Field | Meaning |
+| --- | --- |
+| `feature_id`, `machine_model`, `sequence` | Exact planner-issued frontier. |
+| `prompt_commit`, `prompt_sha256`, `response_path` | Immutable Git artifact identity. |
+| `result_identity` | Durable controller result associated with publication. |
+
+The binding is an alias-free controller artifact. Resolved local roots, topics,
+thread URLs, credentials, and checkpoint locations are not fields. The adapter
+projects prompt-control states without adding or changing core `RunState`
+values.
+
 ## States and Legal Progression
 
 ```text

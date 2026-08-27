@@ -160,3 +160,13 @@ Setup → Foundation → US1 (planner handoff) → US2 (worker result)
 3. Add a single-worker claim/result loop, then the control/recovery surface.
 4. Exercise the same public interfaces with a multi-iteration self-dogfood run.
 5. Only then package documentation and publish; do not add v0.2 adapters.
+
+## Phase 8: F017 Feature Loop D0-D3 adapter
+
+- [x] T039 Specify the thin Feature Loop adapter without changing core v0.1 lifecycle semantics.
+- [x] T040 Add strict feature, state, privacy-policy, and prompt-envelope parsers.
+- [x] T041 Add exact Git commit/path/hash, parent, sequence, and duplicate guards before lease claim.
+- [x] T042 Add alias-safe durable binding, privacy scanning, notification evidence, and state projection.
+- [x] T043 Add deterministic response/checksum/handoff/state publication with transport-only retry semantics.
+- [x] T044 Add disposable frontier, replay, publication, privacy, path, checkpoint-denial, and no-source-mutation tests.
+- [ ] T045 Revalidate the complete baseline, subscription transport, live F017 dry publication, and remote parity.

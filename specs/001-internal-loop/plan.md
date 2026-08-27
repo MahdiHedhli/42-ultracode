@@ -122,3 +122,13 @@ Codex loads discipline alongside Spec Kit skills.
 > **Fill ONLY if Constitution Check has violations that must be justified**
 
 No Constitution Check violations require a complexity exception.
+
+## Feature Loop adapter plan
+
+Implement the F017 D0-D3 pilot as one standard-library adapter module around
+the existing controller. Git guards protect the artifact frontier; existing
+controller leases protect worker ownership. A restricted YAML reader avoids a
+new runtime dependency. Publication uses adjacent atomic files in deterministic
+order, while Git commit/push and aliased notification remain explicit transport
+steps. All tests use disposable repositories, temporary databases, synthetic
+content, and a denied checkpoint alias.

@@ -289,6 +289,12 @@ Before publishing, a reviewer must also:
 - verify that no v0.2 external agent, cloud queue, distributed worker, or API
   key requirement entered the v0.1 runtime.
 
+For a Feature Loop D0-D3 pilot, additionally run the focused Feature Loop tests
+and require exact commit/path/hash, expected-parent, duplicate-frontier,
+privacy-category, checkpoint-denial, no-source-mutation, deterministic
+publication, and transport-only retry coverage. Real aliases and checkpoint
+roots must not be used by automated tests.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment
