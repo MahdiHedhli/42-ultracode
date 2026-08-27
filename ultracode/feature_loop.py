@@ -604,6 +604,7 @@ class PublicationRequest:
     sequence: int
     machine_model: str
     status: str
+    prompt_path: str
     prompt_commit: str
     prompt_sha256: str
     response_commit: str
@@ -728,6 +729,7 @@ class PublicationCoordinator:
         state["current_sequence"] = request.sequence
         state["dogfood_stage"] = "SUPERVISED_CHAT_HANDOFF"
         state["latest_prompt"] = {
+            "path": validate_relative_path(request.prompt_path),
             "commit": request.prompt_commit,
             "sha256": request.prompt_sha256,
         }

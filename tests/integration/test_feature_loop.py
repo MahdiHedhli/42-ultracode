@@ -166,6 +166,7 @@ def publication_request(envelope: PromptEnvelope, commit: str, state: dict[str, 
         sequence=0,
         machine_model="MacBook Pro M2 Max",
         status="PASS",
+        prompt_path="Prompts/F017/MacBook-Pro-M2-Max/000__prompt.md",
         prompt_commit=commit,
         prompt_sha256="a" * 64,
         response_commit=commit,
@@ -304,7 +305,9 @@ def test_publication_order_checksum_handoff_state_and_deterministic_retry(tmp_pa
     assert sidecar == [result.response_sha256, Path(envelope.response_path).name]
     handoff = json.loads((repo / envelope.handoff_path).read_text())
     assert set(handoff) == {"response_url", "response_sha256", "feature_id", "sequence", "machine_model", "status"}
-    assert json.loads((repo / "Prompts/F017/STATE.json").read_text())["state"] == "CHAT_HANDOFF_PENDING"
+    projected = json.loads((repo / "Prompts/F017/STATE.json").read_text())
+    assert projected["state"] == "CHAT_HANDOFF_PENDING"
+    assert projected["latest_prompt"]["path"] == request.prompt_path
 
 
 def test_partial_publication_resume_and_conflicting_object_fail_closed(tmp_path: Path) -> None:
