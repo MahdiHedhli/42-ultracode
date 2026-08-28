@@ -2,6 +2,11 @@
 
 ## D2 Security Repair Plan
 
+0. Register the exact D6 checkpoint-free synthetic repack round-trip policy,
+   bind every authorization field and its canonical digest before lease, reject
+   cross-policy substitution and widening without side effects, and preserve
+   durable identity across restart without executing D6.
+
 0. Register one exact D5R1 bounded duplicate-role repair policy while
    preserving the production PASS-only parent guard and every D2/D4/D5 value
    and digest.

@@ -6,6 +6,7 @@ description: "Actionable implementation tasks for 001-internal-loop"
 
 ## D2 Security Repair
 
+- [x] D2R-D6 Register and qualify the exact D6 checkpoint-free synthetic repack round-trip policy without executing D6.
 - [x] D2R-D5R1 Register and qualify the closed D5R1 duplicate-role repair policy through a planner-authored PASS recovery parent without widening the frontier guard.
 - [x] D2R-D5 Register and qualify the closed bounded checkpoint-free D5 Repack-branch write policy without executing D5.
 - [x] D2R-D4 Register and qualify the closed checkpoint-free D4 investigation policy without executing D4.

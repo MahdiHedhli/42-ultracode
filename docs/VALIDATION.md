@@ -21,6 +21,12 @@ All commands must exit successfully before a dogfood claim, commit, or release
 candidate is accepted. Use `uv run --no-editable pytest` for the integrated suite rather than
 describing selected tests as the full gate.
 
+The D6 registration coverage binds the exact policy ID, canonical digest, and
+all eleven envelope fields before lease acquisition. It rejects all cross-policy
+substitutions, widening attempts, and reconstructed policy objects without
+controller history, requests, or alias resolution, then proves durable identity
+after restart. These tests register policy only and do not execute D6.
+
 The `--no-editable` flag is intentional. In the validated `uv 0.11.17` /
 CPython 3.13 environment, the editable console entry point did not resolve a
 checkout whose path contains spaces; a regular wheel installation did. Verify

@@ -4,6 +4,14 @@
 
 ## D2 Security Repair Addendum
 
+The closed registry also includes the exact D6 checkpoint-free synthetic repack
+round-trip policy with canonical digest
+`4f8e4e2c982dc71c477da455dc0029db73d813d60d60490f9690385fbdd39bcc`.
+It permits only bounded checkpoint-free synthetic repack tests on the branch
+after `PLANNER_ACCEPTED_D5_CHECKPOINT_FREE_PLAN_QUALIFICATION`. Registration
+does not execute D6; checkpoint access, inference, Event 06, automatic chat
+posting, and broader source mutation remain prohibited.
+
 The closed registry includes reviewed D4 checkpoint-free read-only
 investigation, D5 bounded checkpoint-free Repack-branch write, and D5R1 bounded
 duplicate-role repair policies. D2 and D4 require source mutation to remain

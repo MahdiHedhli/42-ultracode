@@ -50,6 +50,7 @@ POLICY_ID = ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR
 D4_POLICY_ID = ReviewedPromptPolicy.F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION
 D5_POLICY_ID = ReviewedPromptPolicy.F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE
 D5R1_POLICY_ID = ReviewedPromptPolicy.F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR
+D6_POLICY_ID = ReviewedPromptPolicy.F017_M2_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK_ROUND_TRIP
 AUTHORIZATION = {
     "schema": "pulsarmlx.graph-prompt/1.0.0",
     "feature_id": "F017",
@@ -79,6 +80,12 @@ D5R1_AUTHORIZATION = {
     "phase": "Feature-Loop-D5R1-bounded-checkpoint-free-repack-repair",
     "human_gate": "PLANNER_ACCEPTED_D5_SCOPE_EXPANSION_REPAIR",
     "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_DUPLICATE_ROLE_REPAIR_BRANCH_ONLY",
+}
+D6_AUTHORIZATION = {
+    **AUTHORIZATION,
+    "phase": "Feature-Loop-D6-checkpoint-free-synthetic-repack-round-trip",
+    "human_gate": "PLANNER_ACCEPTED_D5_CHECKPOINT_FREE_PLAN_QUALIFICATION",
+    "source_mutation": "BOUNDED_CHECKPOINT_FREE_SYNTHETIC_REPACK_TESTS_BRANCH_ONLY",
 }
 
 FEATURE = """\
@@ -609,18 +616,20 @@ def test_exact_d5_policy_registration_and_cross_policy_rejection(tmp_path: Path)
                 )
 
 
-def test_exact_d5r1_policy_registration_and_all_policy_cross_rejection(tmp_path: Path) -> None:
+def test_exact_all_five_policy_registration_and_cross_rejection(tmp_path: Path) -> None:
     fixtures = {
         POLICY_ID: disposable_prompt_repo(tmp_path / "d2", AUTHORIZATION),
         D4_POLICY_ID: disposable_prompt_repo(tmp_path / "d4", D4_AUTHORIZATION),
         D5_POLICY_ID: disposable_prompt_repo(tmp_path / "d5", D5_AUTHORIZATION),
         D5R1_POLICY_ID: disposable_prompt_repo(tmp_path / "d5r1", D5R1_AUTHORIZATION),
+        D6_POLICY_ID: disposable_prompt_repo(tmp_path / "d6", D6_AUTHORIZATION),
     }
     expected = {
         POLICY_ID: "d0187ae426b82d676c5cb370be669f58e17b75eae4036597a758d40c6949446b",
         D4_POLICY_ID: "89bb8b74fadda6562eb791cf1f932de9307896e578d3f32c59688457277f59af",
         D5_POLICY_ID: "7528e762df0b32e4a6d69869c34065f90ff44616ea95404c4e1f84f5b6eff839",
         D5R1_POLICY_ID: "b2a00e4f895339c6ddf63e9c6624e0b3dfc7bdbc76d2a70ca534126227a575eb",
+        D6_POLICY_ID: "4f8e4e2c982dc71c477da455dc0029db73d813d60d60490f9690385fbdd39bcc",
     }
     identities = {}
     for policy_id, fixture in fixtures.items():
@@ -645,8 +654,8 @@ def test_exact_d5r1_policy_registration_and_all_policy_cross_rejection(tmp_path:
                     sidecar_path=PROMPT_SIDECAR,
                     policy_id=selected_policy,
                 )
-    identity = identities[D5R1_POLICY_ID]
-    binding = FrontierBinding.from_identity(identity, result_identity="d5r1-policy-result")
+    identity = identities[D6_POLICY_ID]
+    binding = FrontierBinding.from_identity(identity, result_identity="d6-policy-result")
     controller, run_id = ready_controller(tmp_path)
     artifact_id = bind_frontier(controller, run_id, binding)
     replayed = Controller(tmp_path / "controller.db").artifacts(run_id)
@@ -718,11 +727,44 @@ def test_every_d5r1_policy_field_is_bound_before_lease(tmp_path: Path, field: st
     assert git(fixture.repo, "status", "--porcelain=v1") == ""
 
 
+@pytest.mark.parametrize(("field", "replacement"), AUTHORIZATION_MUTATIONS)
+def test_every_d6_policy_field_is_bound_before_lease(tmp_path: Path, field: str, replacement: str) -> None:
+    fixture = disposable_prompt_repo(tmp_path, D6_AUTHORIZATION)
+    prompt = (
+        (fixture.repo / PROMPT_PATH)
+        .read_text()
+        .replace(f"{field}: {D6_AUTHORIZATION[field]}", f"{field}: {replacement}", 1)
+    )
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", f"mutate d6 {field}")
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    resolver = LocalAliasResolver(
+        {"SOURCE_REPO_ROOT": "synthetic-source", "CHECKPOINT_ROOT": "synthetic-checkpoint"},
+        denied=("SOURCE_REPO_ROOT", "CHECKPOINT_ROOT"),
+    )
+    with pytest.raises(FrontierError, match=f"authorization mismatch: {field}"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=git(fixture.repo, "rev-parse", "HEAD"),
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=D6_POLICY_ID,
+        )
+    assert resolver.requests == []
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+    assert git(fixture.repo, "status", "--porcelain=v1") == ""
+
+
 def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> None:
     import ultracode.feature_loop as feature_loop
 
     registry = feature_loop._REVIEWED_POLICIES
-    assert set(registry) == {POLICY_ID, D4_POLICY_ID, D5_POLICY_ID, D5R1_POLICY_ID}
+    assert set(registry) == {POLICY_ID, D4_POLICY_ID, D5_POLICY_ID, D5R1_POLICY_ID, D6_POLICY_ID}
     with pytest.raises(TypeError):
         registry[D4_POLICY_ID] = registry[POLICY_ID]  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -742,6 +784,7 @@ def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> N
         (D4_POLICY_ID, D4_AUTHORIZATION),
         (D5_POLICY_ID, D5_AUTHORIZATION),
         (D5R1_POLICY_ID, D5R1_AUTHORIZATION),
+        (D6_POLICY_ID, D6_AUTHORIZATION),
     ):
         for field in ("original_checkpoint_access", "full_model_inference", "automatic_chat_posting"):
             with pytest.raises(FrontierError, match="widens a prohibited capability"):
@@ -786,6 +829,28 @@ def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> N
         feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
             D5R1_POLICY_ID,
             **{**D5R1_AUTHORIZATION, "phase": D5_AUTHORIZATION["phase"]},
+        )
+    for source_mutation in (
+        "ALLOWED",
+        "PROHIBITED",
+        "BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
+        "BOUNDED_CHECKPOINT_FREE_REPACK_DUPLICATE_ROLE_REPAIR_BRANCH_ONLY",
+        "BOUNDED_OTHER_BRANCH_ONLY",
+    ):
+        with pytest.raises(FrontierError, match="policy-specific source mutation"):
+            feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+                D6_POLICY_ID,
+                **{**D6_AUTHORIZATION, "source_mutation": source_mutation},
+            )
+    with pytest.raises(FrontierError, match="unsafe human gate"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D6_POLICY_ID,
+            **{**D6_AUTHORIZATION, "human_gate": "PLANNER_ACCEPTED_WRONG_GATE"},
+        )
+    with pytest.raises(FrontierError, match="policy-specific phase"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D6_POLICY_ID,
+            **{**D6_AUTHORIZATION, "phase": D5R1_AUTHORIZATION["phase"]},
         )
 
 
@@ -858,6 +923,44 @@ def test_matching_widened_d5r1_prompt_has_zero_lease_and_never_resolves_aliases(
             expected_sha256=prompt_sha,
             sidecar_path=PROMPT_SIDECAR,
             policy_id=D5R1_POLICY_ID,
+        )
+    assert resolver.requests == []
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+    assert git(fixture.repo, "status", "--porcelain=v1") == ""
+
+
+def test_matching_widened_d6_prompt_has_zero_lease_and_never_resolves_aliases(
+    tmp_path: Path,
+) -> None:
+    fixture = disposable_prompt_repo(tmp_path, D6_AUTHORIZATION)
+    prompt = (
+        (fixture.repo / PROMPT_PATH)
+        .read_text()
+        .replace(
+            "source_mutation: BOUNDED_CHECKPOINT_FREE_SYNTHETIC_REPACK_TESTS_BRANCH_ONLY",
+            "source_mutation: BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
+            1,
+        )
+    )
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", "matching widened d6 prompt")
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    resolver = LocalAliasResolver(
+        {"SOURCE_REPO_ROOT": "synthetic-source", "CHECKPOINT_ROOT": "synthetic-checkpoint"},
+        denied=("SOURCE_REPO_ROOT", "CHECKPOINT_ROOT"),
+    )
+    with pytest.raises(FrontierError, match="authorization mismatch: source_mutation"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=git(fixture.repo, "rev-parse", "HEAD"),
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=D6_POLICY_ID,
         )
     assert resolver.requests == []
     assert controller.history(run_id) == history

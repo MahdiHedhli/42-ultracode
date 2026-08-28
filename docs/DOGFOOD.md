@@ -15,6 +15,12 @@ The automated harness tests transport, persistence, replay, and recovery. The
 real-repository procedure below tests the human-visible planning/execution loop.
 They are complementary; neither should be described as proof of the other.
 
+Sequence 11 runs under the accepted D4 policy and registers only the exact D6
+checkpoint-free synthetic repack round-trip envelope. Qualification requires a
+clean baseline, one leased worker, no aliases or checkpoint access, no D6
+execution, and a final PASS handoff. Public-safe evidence is recorded in
+`docs/dogfood/2026-08-28-d6-policy-registration-evidence.json`.
+
 ## Current automation boundary
 
 This procedure is designed for **Level C**. A person explicitly invokes the

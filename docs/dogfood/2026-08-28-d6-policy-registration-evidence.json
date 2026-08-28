@@ -1,0 +1,48 @@
+{
+  "schema": "ultracode.f017.policy-registration-evidence.v1",
+  "sequence": 11,
+  "host": {
+    "machine": "MacBook Pro M2 Max",
+    "architecture": "arm64"
+  },
+  "starting_authority": {
+    "commit": "5cb00bfd5d4499dd193b2298bba2cfb7274579ab",
+    "tree": "1091a42726e318d81342b92dd05c780385ee9f7f"
+  },
+  "execution_policy": {
+    "policy_id": "f017-m2-d4-checkpoint-free-repack-investigation-v1",
+    "canonical_digest": "89bb8b74fadda6562eb791cf1f932de9307896e578d3f32c59688457277f59af"
+  },
+  "registered_policy": {
+    "policy_id": "f017-m2-d6-checkpoint-free-synthetic-repack-round-trip-v1",
+    "canonical_digest": "4f8e4e2c982dc71c477da455dc0029db73d813d60d60490f9690385fbdd39bcc",
+    "phase": "Feature-Loop-D6-checkpoint-free-synthetic-repack-round-trip",
+    "human_gate": "PLANNER_ACCEPTED_D5_CHECKPOINT_FREE_PLAN_QUALIFICATION",
+    "source_mutation": "BOUNDED_CHECKPOINT_FREE_SYNTHETIC_REPACK_TESTS_BRANCH_ONLY"
+  },
+  "qualification": {
+    "baseline_tests_passed": 250,
+    "final_tests_passed": 262,
+    "ruff_format": "PASS",
+    "ruff_lint": "PASS",
+    "mypy": "PASS",
+    "pytest": "PASS",
+    "dogfood": "PASS"
+  },
+  "controller": {
+    "workers": 1,
+    "aliases": 0,
+    "requests": 1,
+    "lease_state": "RELEASED",
+    "handoff": "PASS"
+  },
+  "prohibited_activity": {
+    "pulsarmlx_access": false,
+    "checkpoint_access": false,
+    "source_aliases": false,
+    "inference": false,
+    "event_06": false,
+    "d6_execution": false,
+    "chat_posting": false
+  }
+}
