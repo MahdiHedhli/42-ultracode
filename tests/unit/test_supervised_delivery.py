@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import io
+import json
+import os
+import pty
+import re
+import select
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+import ultracode.supervised_delivery as delivery
+from ultracode.supervised_delivery import DeliveryError, DeliveryOutcome, DeliveryPreview
+
+
+def _route(root: Path) -> Path:
+    path = root / "routes.json"
+    path.write_text('{"aliases":{"SYNTHETIC_TARGET":"synthetic-thread"},"version":1}', encoding="ascii")
+    path.chmod(0o600)
+    return path
+
+
+def _run(root: Path, transcript: bytes | None = None) -> tuple[DeliveryOutcome, delivery._JsonlSession, bytes]:
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"synthetic supervised delivery")
+    writer = io.BytesIO()
+    outcome, session = delivery._perform(
+        preview=preview,
+        capability=delivery._test_capability(preview),
+        route_registry=_route(root),
+        journal_path=root / "journal.jsonl",
+        streams=(io.BytesIO(transcript or delivery._fake_transcript()), writer),
+        attempt_id="0" * 32,
+    )
+    assert session is not None
+    return outcome, session, writer.getvalue()
+
+
+def test_protocol_profile_and_fixed_process_boundary() -> None:
+    assert delivery.APP_SERVER_ARGV == ("codex", "app-server", "--listen", "stdio://")
+    assert delivery.PROTOCOL_PROFILE.request_methods == {
+        "initialize",
+        "thread/read",
+        "thread/resume",
+        "turn/start",
+    }
+    assert delivery.PROTOCOL_PROFILE.client_notifications == {"initialized"}
+    assert delivery.PROTOCOL_PROFILE.server_notifications == {"turn/started", "turn/completed", "error"}
+    assert "experimental" not in " ".join(delivery.APP_SERVER_ARGV)
+
+
+def test_twenty_deterministic_fake_peer_reconstructions(tmp_path: Path) -> None:
+    results = []
+    for index in range(20):
+        result = delivery._qualify_fake_peer(tmp_path / f"run-{index:02d}")
+        assert result["outcome"] == "DELIVERED"
+        assert result["request_methods"] == ["initialize", "thread/read", "thread/resume", "turn/start"]
+        assert result["client_notifications"] == ["initialized"]
+        assert set(result["real_operation_counters"].values()) == {0}  # type: ignore[union-attr]
+        results.append((result["transcript_sha256"], result["journal_sha256"]))
+    assert len(set(results)) == 1
+
+
+def test_turn_start_has_no_override_fields_and_is_exactly_once(tmp_path: Path) -> None:
+    outcome, session, written = _run(tmp_path)
+    assert outcome is DeliveryOutcome.DELIVERED
+    requests = [json.loads(line) for line in written.splitlines()]
+    start = next(item for item in requests if item.get("method") == "turn/start")
+    assert set(start["params"]) == {"input", "threadId"}
+    assert start["params"]["input"] == [{"text": "synthetic supervised delivery", "type": "text"}]
+    assert session.methods.count("turn/start") == 1
+
+
+def test_confirmation_uses_tty_exact_preview_and_one_use() -> None:
+    master_fd, slave_fd = pty.openpty()
+    reader = os.fdopen(os.dup(slave_fd), "r", encoding="utf-8", buffering=1)
+    writer = os.fdopen(os.dup(slave_fd), "w", encoding="utf-8", buffering=1)
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"exact payload")
+    captured: dict[str, object] = {}
+
+    def confirm() -> None:
+        captured["capability"] = delivery.confirm_preview(
+            preview, input_stream=reader, output_stream=writer, ttl_seconds=10
+        )
+
+    thread = threading.Thread(target=confirm)
+    thread.start()
+    deadline = time.monotonic() + 5
+    output = ""
+    while "re-enter challenge exactly:" not in output and time.monotonic() < deadline:
+        ready, _, _ = select.select([master_fd], [], [], max(0, deadline - time.monotonic()))
+        if ready:
+            output += os.read(master_fd, 8192).decode("utf-8")
+    challenge = re.search(r"confirmation-challenge: ([0-9A-F]{16})", output)
+    assert challenge is not None
+    os.write(master_fd, (challenge.group(1) + "\n").encode("ascii"))
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    capability = captured["capability"]
+    capability.consume(preview)  # type: ignore[attr-defined]
+    with pytest.raises(DeliveryError, match="already consumed"):
+        capability.consume(preview)  # type: ignore[attr-defined]
+    reader.close()
+    writer.close()
+    os.close(master_fd)
+    os.close(slave_fd)
+
+
+def test_confirmation_rejects_non_tty_before_route_resolution(tmp_path: Path) -> None:
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"payload")
+    with pytest.raises(DeliveryError, match="interactive TTY"):
+        delivery.confirm_preview(preview, input_stream=io.StringIO("x\n"), output_stream=io.StringIO())
+    assert not (tmp_path / "routes.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda lines: lines.__setitem__(0, b'{"id":99,"jsonrpc":"2.0","result":{}}'),
+        lambda lines: lines.__setitem__(1, b'{"jsonrpc":"2.0","method":"approval","params":{}}'),
+        lambda lines: lines.__setitem__(-1, b'{"jsonrpc":"2.0","method":"unknown","params":{}}'),
+        lambda lines: lines.__setitem__(-1, lines[-1][:-1]),
+    ],
+)
+def test_protocol_mutations_fail_closed(tmp_path: Path, mutator) -> None:  # type: ignore[no-untyped-def]
+    lines = delivery._fake_transcript().splitlines()
+    mutator(lines)
+    transcript = b"\n".join(lines) + b"\n"
+    outcome, _session, _written = _run(tmp_path, transcript)
+    assert outcome in {DeliveryOutcome.FAILED_BEFORE_WRITE, DeliveryOutcome.UNCERTAIN}
+
+
+def test_crash_after_attempt_start_recovers_as_terminal_uncertain(tmp_path: Path) -> None:
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"payload")
+    journal_path = tmp_path / "journal.jsonl"
+    with delivery._Journal(journal_path) as journal:
+        journal.append(
+            event="ATTEMPT_STARTED",
+            attempt_id="a" * 32,
+            preview=preview,
+            thread_id="synthetic-thread",
+        )
+    with delivery._Journal(journal_path) as journal:
+        assert (
+            journal.terminal_for(payload_sha256=preview.payload_sha256, target_alias=preview.target_alias)
+            is DeliveryOutcome.UNCERTAIN
+        )
+
+
+def test_partial_or_corrupt_journal_fails_closed(tmp_path: Path) -> None:
+    partial = tmp_path / "partial.jsonl"
+    partial.write_bytes(b'{"event":"ATTEMPT_STARTED"}')
+    partial.chmod(0o600)
+    with pytest.raises(DeliveryError, match="partial"), delivery._Journal(partial):
+        pass
+    corrupt = tmp_path / "corrupt.jsonl"
+    corrupt.write_bytes(b'{"attempt_id":"x"}\n')
+    corrupt.chmod(0o600)
+    with pytest.raises(DeliveryError), delivery._Journal(corrupt):
+        pass
+
+
+def test_alias_registry_rejects_symlink_and_unsafe_mode(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    route.chmod(0o666)
+    with pytest.raises(DeliveryError, match="ownership or mode"):
+        delivery._resolve_alias(route, "SYNTHETIC_TARGET")
+    route.chmod(0o600)
+    link = tmp_path / "link.json"
+    link.symlink_to(route)
+    with pytest.raises(DeliveryError, match="cannot be opened safely"):
+        delivery._resolve_alias(link, "SYNTHETIC_TARGET")

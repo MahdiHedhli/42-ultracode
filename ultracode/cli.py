@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
@@ -11,6 +12,7 @@ from typing import cast
 from .controller import Controller, ControllerError
 from .dogfood import run_dogfood
 from .executor import CodexCliExecutor, ExecutorError, execute_one
+from .supervised_delivery import DeliveryError, deliver_foreground
 
 
 def _print_json(value: object) -> None:
@@ -72,6 +74,19 @@ def _dogfood_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _supervised_delivery_command(args: argparse.Namespace) -> int:
+    outcome = deliver_foreground(
+        message_path=Path(args.message),
+        target_alias=args.target_alias,
+        route_registry=Path(args.route_registry),
+        journal_path=Path(args.journal),
+        input_stream=sys.stdin,
+        output_stream=sys.stdout,
+    )
+    _print_json({"outcome": outcome.value})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ultracode", description="42 Ultracode local controller")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -97,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
     dogfood.add_argument("--project-root", default=str(Path.cwd()))
     dogfood.set_defaults(handler=_dogfood_command)
 
+    delivery = subcommands.add_parser(
+        "supervised-delivery", help="perform one foreground TTY-confirmed Codex task delivery"
+    )
+    delivery.add_argument("--message", required=True, help="owner-only UTF-8 payload file")
+    delivery.add_argument("--target-alias", required=True, help="closed symbolic route alias")
+    delivery.add_argument("--route-registry", required=True, help="owner-only route registry")
+    delivery.add_argument("--journal", required=True, help="owner-only append journal")
+    delivery.set_defaults(handler=_supervised_delivery_command)
+
     worker = subcommands.add_parser("worker-once", help="claim and execute one Codex CLI turn")
     worker.add_argument("--database", required=True)
     worker.add_argument("--run-id", required=True)
@@ -118,7 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         handler = cast(Callable[[argparse.Namespace], int], args.handler)
         return handler(args)
-    except (ControllerError, ExecutorError, OSError, ValueError) as exc:
+    except (ControllerError, DeliveryError, ExecutorError, OSError, ValueError) as exc:
         parser.error(str(exc))
 
 
