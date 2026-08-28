@@ -33,7 +33,6 @@ _SHA = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SYMBOL = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
 _NONCE = re.compile(r"[0-9a-f]{32}")
-_SEALED_SUBCLASSING_OPEN = True
 _PATH = re.compile(
     r"Prompts/F017/MacBook-Pro-M2-Max/(?P<s>[0-9]{3})__F017__MacBook-Pro-M2-Max__[A-Za-z0-9-]+__response[.]md"
 )
@@ -76,13 +75,29 @@ class DeliveryEventKind(StrEnum):
     MOCK_DUPLICATE_REJECTED = "MOCK_DUPLICATE_REJECTED"
 
 
-class _Sealed:
-    __slots__ = ("_values",)
+def _sealed_metaclass() -> type[type]:
+    remaining_internal_types = 7
+
+    class SealedMeta(type):
+        def __new__(mcls, name: str, bases: tuple[type, ...], namespace: dict[str, object], **kwargs: object) -> type:
+            nonlocal remaining_internal_types
+            if remaining_internal_types == 0:
+                raise ReadinessError("sealed readiness objects cannot be subclassed")
+            remaining_internal_types -= 1
+            return super().__new__(mcls, name, bases, namespace, **kwargs)
+
+    return SealedMeta
+
+
+class _Sealed(metaclass=_sealed_metaclass()):  # type: ignore[metaclass]
+    __slots__ = ("_proof", "_values")
+    _proof: object
     _values: Mapping[str, object]
 
     def __init__(self, values: Mapping[str, object], *, _token: object) -> None:
         if _token is not _TOKEN:
             raise ReadinessError("object must be created by the closed boundary")
+        object.__setattr__(self, "_proof", _TOKEN)
         object.__setattr__(self, "_values", MappingProxyType(dict(values)))
 
     def __setattr__(self, _name: str, _value: object) -> NoReturn:
@@ -100,16 +115,13 @@ class _Sealed:
     def __reduce_ex__(self, _protocol: object) -> NoReturn:
         raise ReadinessError("sealed readiness objects cannot be serialized")
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
-        if not _SEALED_SUBCLASSING_OPEN:
-            raise ReadinessError("sealed readiness objects cannot be subclassed")
-
     def _get(self, key: str) -> object:
         return self._values[key]
 
 
 class SealedReadinessRequest(_Sealed):
+    __slots__ = ()
+
     @property
     def feature_id(self) -> str:
         return cast(str, self._get("feature_id"))
@@ -148,18 +160,20 @@ class SealedReadinessRequest(_Sealed):
 
 
 class HandoffAuthority(_Sealed):
-    pass
+    __slots__ = ()
 
 
 class SanitizedObservation(_Sealed):
-    pass
+    __slots__ = ()
 
 
 class ReadinessEvent(_Sealed):
-    pass
+    __slots__ = ()
 
 
 class PreparedDryRun(_Sealed):
+    __slots__ = ()
+
     @property
     def canonical_payload_sha256(self) -> str:
         return cast(str, self._get("canonical_payload_sha256"))
@@ -170,6 +184,8 @@ class PreparedDryRun(_Sealed):
 
 
 class DeliverySnapshot(_Sealed):
+    __slots__ = ()
+
     @property
     def state(self) -> DeliveryState:
         return cast(DeliveryState, self._get("state"))
@@ -177,9 +193,6 @@ class DeliverySnapshot(_Sealed):
     @property
     def event_log_sha256(self) -> str:
         return cast(str, self._get("event_log_sha256"))
-
-
-_SEALED_SUBCLASSING_OPEN = False
 
 
 def _canonical(value: object) -> bytes:
@@ -235,7 +248,12 @@ def _require_sealed(record: object, expected: type[_Sealed]) -> _Sealed:
     if type(record) is not expected:
         raise ReadinessError("readiness object has the wrong sealed type")
     sealed = record
-    if not isinstance(sealed._values, _PROXY_TYPE):
+    try:
+        proof = sealed._proof
+        values = sealed._values
+    except AttributeError as exc:
+        raise ReadinessError("readiness object is not sealed") from exc
+    if proof is not _TOKEN or not isinstance(values, _PROXY_TYPE):
         raise ReadinessError("readiness object is not sealed")
     return sealed
 
@@ -254,9 +272,13 @@ def seal_readiness_request(
 ) -> SealedReadinessRequest:
     if (feature_id, machine_model, prior_sequence, current_sequence) != ("F017", "MacBook Pro M2 Max", 17, 18):
         raise ReadinessError("frontier identity mismatch")
+    if not isinstance(expected_response_path, str):
+        raise ReadinessError("response identity is invalid")
     match = _PATH.fullmatch(expected_response_path)
     if (
-        not _COMMIT.fullmatch(expected_response_commit)
+        not isinstance(expected_response_commit, str)
+        or not _COMMIT.fullmatch(expected_response_commit)
+        or not isinstance(expected_response_sha256, str)
         or not _SHA.fullmatch(expected_response_sha256)
         or match is None
         or int(match.group("s")) != 17
@@ -267,7 +289,7 @@ def seal_readiness_request(
         or sha256(verified_response_bytes).hexdigest() != expected_response_sha256
     ):
         raise ReadinessError("verified response bytes do not match")
-    if not _SYMBOL.fullmatch(route_alias_key):
+    if not isinstance(route_alias_key, str) or not _SYMBOL.fullmatch(route_alias_key):
         raise ReadinessError("route key must remain symbolic")
     url = f"https://github.com/MahdiHedhli/PulsarMLX-Prompts/blob/{expected_response_commit}/{expected_response_path}"
     return SealedReadinessRequest(
@@ -390,7 +412,9 @@ def make_mock_event(
 ) -> ReadinessEvent:
     if (
         not isinstance(kind, DeliveryEventKind)
+        or not isinstance(owner_id, str)
         or not _SYMBOL.fullmatch(owner_id)
+        or not isinstance(idempotency_key, str)
         or not _SHA.fullmatch(idempotency_key)
         or type(ordinal) is not int
         or ordinal < 1
@@ -417,7 +441,7 @@ def replay_mock_lifecycle(
     prepared: PreparedDryRun, *, owner_id: str, events: tuple[ReadinessEvent, ...]
 ) -> DeliverySnapshot:
     _require_sealed(prepared, PreparedDryRun)
-    if not _SYMBOL.fullmatch(owner_id) or not isinstance(events, tuple):
+    if not isinstance(owner_id, str) or not _SYMBOL.fullmatch(owner_id) or not isinstance(events, tuple):
         raise ReadinessError("mock owner or history is invalid")
     state = DeliveryState.UNPREPARED
     ledger: list[dict[str, object]] = []

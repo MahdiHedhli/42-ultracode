@@ -4,6 +4,7 @@ import copy
 import json
 import pickle
 from hashlib import sha256
+from types import MappingProxyType
 
 import pytest
 
@@ -211,6 +212,62 @@ def test_nonreceipt_events_reject_any_receipt_value(receipt: object):
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expected_response_commit", None),
+        ("expected_response_path", None),
+        ("expected_response_sha256", None),
+        ("route_alias_key", None),
+    ],
+)
+def test_seal_rejects_nonstring_regex_inputs(field: str, value: object):
+    arguments: dict[str, object] = {
+        "feature_id": "F017",
+        "machine_model": "MacBook Pro M2 Max",
+        "prior_sequence": 17,
+        "current_sequence": 18,
+        "expected_response_commit": COMMIT,
+        "expected_response_path": PATH,
+        "expected_response_sha256": HASH,
+        "verified_response_bytes": RESPONSE,
+        "route_alias_key": ROUTE,
+    }
+    arguments[field] = value
+    with pytest.raises(ReadinessError):
+        seal_readiness_request(**arguments)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("owner_id", "idempotency_key"),
+    [(None, "a" * 64), (OWNER, b"a" * 64)],
+)
+def test_mock_event_rejects_nonstring_regex_inputs(owner_id: object, idempotency_key: object):
+    with pytest.raises(ReadinessError):
+        make_mock_event(
+            kind=DeliveryEventKind.PREPARE,
+            owner_id=owner_id,  # type: ignore[arg-type]
+            idempotency_key=idempotency_key,  # type: ignore[arg-type]
+            ordinal=1,
+        )
+
+
+def test_replay_rejects_nonstring_owner():
+    with pytest.raises(ReadinessError):
+        replay_mock_lifecycle(dry(), owner_id=None, events=())  # type: ignore[arg-type]
+
+
+def test_uninitialized_and_mapping_proxy_forged_requests_fail_closed():
+    uninitialized = SealedReadinessRequest.__new__(SealedReadinessRequest)
+    with pytest.raises(ReadinessError, match="not sealed"):
+        parse_handoff_authority(canonical(h()), uninitialized)
+
+    forged = SealedReadinessRequest.__new__(SealedReadinessRequest)
+    object.__setattr__(forged, "_values", MappingProxyType({}))
+    with pytest.raises(ReadinessError, match="not sealed"):
+        parse_handoff_authority(canonical(h()), forged)
+
+
+@pytest.mark.parametrize(
     "field",
     ["html", "dom", "page_text", "conversation", "url", "cookie", "token", "clipboard", "accessibility", "screenshot"],
 )
@@ -234,6 +291,8 @@ def test_sealing_retry_restart_terminal_and_zero_spies():
             type("Widened", (type(value),), {})
         with pytest.raises(ReadinessError):
             type("Widened", (type(value),), {"__module__": "ultracode.supervised_handoff"})
+        with pytest.raises(ReadinessError):
+            type("Widened", (type(value),), {"__name__": type(value).__name__})
     with pytest.raises(ReadinessError):
         SealedReadinessRequest({}, _token=object())
 
