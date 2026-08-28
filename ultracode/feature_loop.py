@@ -410,6 +410,7 @@ class ReviewedPromptPolicy(StrEnum):
 
     F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR = "f017-m2-d2-policy-trust-anchor-repair-v1"
     F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION = "f017-m2-d4-checkpoint-free-repack-investigation-v1"
+    F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE = "f017-m2-d5-bounded-checkpoint-free-repack-write-v1"
 
 
 _AUTHORIZATION_FIELDS = (
@@ -426,11 +427,32 @@ _AUTHORIZATION_FIELDS = (
     "automatic_chat_posting",
 )
 _POLICY_TOKEN = object()
-_PROHIBITED_CAPABILITY_FIELDS = (
-    "source_mutation",
+_UNCONDITIONALLY_PROHIBITED_CAPABILITY_FIELDS = (
     "original_checkpoint_access",
     "full_model_inference",
     "automatic_chat_posting",
+)
+_POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingProxyType(
+    {
+        ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR: MappingProxyType(
+            {
+                "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
+                "source_mutation": "PROHIBITED",
+            }
+        ),
+        ReviewedPromptPolicy.F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION: MappingProxyType(
+            {
+                "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_READ_ONLY",
+                "source_mutation": "PROHIBITED",
+            }
+        ),
+        ReviewedPromptPolicy.F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE: MappingProxyType(
+            {
+                "human_gate": "PLANNER_ACCEPTED_D4_CHECKPOINT_FREE_WRITE",
+                "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
+            }
+        ),
+    }
 )
 
 
@@ -458,9 +480,12 @@ class _PromptAuthorizationPolicy:
         normalized = {field: values[field].strip() for field in _AUTHORIZATION_FIELDS}
         if any(not value for value in normalized.values()) or normalized["schema"] != PROMPT_SCHEMA:
             raise FrontierError("reviewed prompt policy contains an unsupported value")
-        if any(normalized[field] != "PROHIBITED" for field in _PROHIBITED_CAPABILITY_FIELDS):
+        if any(normalized[field] != "PROHIBITED" for field in _UNCONDITIONALLY_PROHIBITED_CAPABILITY_FIELDS):
             raise FrontierError("reviewed prompt policy widens a prohibited capability")
-        if not normalized["human_gate"].startswith("NOT_REQUIRED_CHECKPOINT_FREE_"):
+        boundary = _POLICY_BOUNDARIES.get(policy_id)
+        if boundary is None or normalized["source_mutation"] != boundary["source_mutation"]:
+            raise FrontierError("reviewed prompt policy has invalid policy-specific source mutation")
+        if normalized["human_gate"] != boundary["human_gate"]:
             raise FrontierError("reviewed prompt policy contains an unsafe human gate")
         canonical = json.dumps(
             {"authorization": normalized, "policy_id": policy_id.value},
@@ -523,6 +548,20 @@ _REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = 
             human_gate="NOT_REQUIRED_CHECKPOINT_FREE_READ_ONLY",
             source_repository="MahdiHedhli/PulsarMLX",
             source_mutation="PROHIBITED",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        ),
+        ReviewedPromptPolicy.F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D5-bounded-checkpoint-free-repack-write",
+            human_gate="PLANNER_ACCEPTED_D4_CHECKPOINT_FREE_WRITE",
+            source_repository="MahdiHedhli/PulsarMLX",
+            source_mutation="BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
             original_checkpoint_access="PROHIBITED",
             full_model_inference="PROHIBITED",
             automatic_chat_posting="PROHIBITED",

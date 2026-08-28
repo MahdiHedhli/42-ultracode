@@ -2,6 +2,10 @@
 
 ## D2 Security Repair Plan
 
+0. Register one exact D5 bounded checkpoint-free Repack-branch write policy
+   while preserving D2/D4 values, digests, and universal checkpoint,
+   inference, and chat-posting prohibitions.
+
 0. Register one exact D4 checkpoint-free read-only policy while preserving the
    existing D2 transport policy and closed registry construction.
 

@@ -318,6 +318,14 @@ derive its canonical digest through production code, prove cross-policy phase
 and gate rejection, bind every field independently, reject registry mutation
 and unsafe minting, and preserve the existing D2 policy for sequence execution.
 
+Sequence 6 registers one D5 bounded checkpoint-free Repack-branch write policy
+without executing D5. Validation must preserve the exact D2/D4 values and
+digests, derive the D5 digest through production canonicalization, reject every
+cross-policy substitution and field mutation, enforce policy-ID-specific source
+mutation and human gates, keep checkpoint/inference/chat capabilities universally
+prohibited, prove zero lease/history mutation for a matching widened prompt, and
+show that source and checkpoint aliases were never requested.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

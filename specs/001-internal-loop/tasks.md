@@ -6,6 +6,7 @@ description: "Actionable implementation tasks for 001-internal-loop"
 
 ## D2 Security Repair
 
+- [x] D2R-D5 Register and qualify the closed bounded checkpoint-free D5 Repack-branch write policy without executing D5.
 - [x] D2R-D4 Register and qualify the closed checkpoint-free D4 investigation policy without executing D4.
 - [x] D2R-P Bind D0-D3 authorization to a closed reviewed-policy registry and durable policy digest.
 - [x] D2R-0 Bind all prompt authorization fields to trusted typed policy and enforce exact control-document schemas.
