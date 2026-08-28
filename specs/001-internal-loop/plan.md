@@ -2,6 +2,11 @@
 
 ## D2 Security Repair Plan
 
+0. Register the exact D6R1 bounded checkpoint-free repack path-safety repair
+   policy through the ordinary PASS-only frontier, bind its canonical identity
+   before lease, and reject cross-policy substitution or capability widening
+   without executing D6R1.
+
 0. Register the exact D6 checkpoint-free synthetic repack round-trip policy,
    bind every authorization field and its canonical digest before lease, reject
    cross-policy substitution and widening without side effects, and preserve

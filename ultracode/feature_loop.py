@@ -413,6 +413,9 @@ class ReviewedPromptPolicy(StrEnum):
     F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE = "f017-m2-d5-bounded-checkpoint-free-repack-write-v1"
     F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR = "f017-m2-d5r1-bounded-checkpoint-free-repack-repair-v1"
     F017_M2_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK_ROUND_TRIP = "f017-m2-d6-checkpoint-free-synthetic-repack-round-trip-v1"
+    F017_M2_D6R1_BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR = (
+        "f017-m2-d6r1-bounded-checkpoint-free-repack-path-safety-repair-v1"
+    )
 
 
 _AUTHORIZATION_FIELDS = (
@@ -469,6 +472,13 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
                 "phase": "Feature-Loop-D6-checkpoint-free-synthetic-repack-round-trip",
                 "human_gate": "PLANNER_ACCEPTED_D5_CHECKPOINT_FREE_PLAN_QUALIFICATION",
                 "source_mutation": "BOUNDED_CHECKPOINT_FREE_SYNTHETIC_REPACK_TESTS_BRANCH_ONLY",
+            }
+        ),
+        ReviewedPromptPolicy.F017_M2_D6R1_BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR: MappingProxyType(
+            {
+                "phase": "Feature-Loop-D6R1-bounded-checkpoint-free-repack-path-safety-repair",
+                "human_gate": "PLANNER_ACCEPTED_D6_SCOPE_EXPANSION_REPAIR",
+                "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR_BRANCH_ONLY",
             }
         ),
     }
@@ -611,6 +621,20 @@ _REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = 
             human_gate="PLANNER_ACCEPTED_D5_CHECKPOINT_FREE_PLAN_QUALIFICATION",
             source_repository="MahdiHedhli/PulsarMLX",
             source_mutation="BOUNDED_CHECKPOINT_FREE_SYNTHETIC_REPACK_TESTS_BRANCH_ONLY",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        ),
+        ReviewedPromptPolicy.F017_M2_D6R1_BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D6R1_BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D6R1-bounded-checkpoint-free-repack-path-safety-repair",
+            human_gate="PLANNER_ACCEPTED_D6_SCOPE_EXPANSION_REPAIR",
+            source_repository="MahdiHedhli/PulsarMLX",
+            source_mutation="BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR_BRANCH_ONLY",
             original_checkpoint_access="PROHIBITED",
             full_model_inference="PROHIBITED",
             automatic_chat_posting="PROHIBITED",

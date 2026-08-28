@@ -340,6 +340,16 @@ canonicalization, reject all field and cross-policy substitutions before lease,
 prove durable policy binding across restart, and demonstrate that no source or
 checkpoint alias was requested.
 
+Sequence 13 registers one D6R1 bounded checkpoint-free repack path-safety
+repair policy without executing D6R1. Validation must preserve every earlier
+policy ID and digest, derive the D6R1 digest through production
+canonicalization, bind all eleven authorization fields before lease, reject
+all six-way cross-policy substitutions and widening, and preserve durable
+identity across restart. Recovery admission remains the normal PASS-only
+frontier path: the exact planner-authored recovery attestation is PASS, while a
+raw `BLOCKED` parent, arbitrary prose, stale identity, sequence skip, or
+reusable bypass remains rejected before lease and before alias resolution.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

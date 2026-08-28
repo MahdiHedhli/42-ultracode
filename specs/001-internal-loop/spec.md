@@ -4,6 +4,17 @@
 
 ## D2 Security Repair Addendum
 
+The closed registry also includes the exact D6R1 bounded checkpoint-free
+repack path-safety repair policy with canonical digest
+`b893948a38f56d8646cf25e0807283890ee587fff02b47b311047a6ed1904a3b`.
+It permits only the planner-accepted path-safety repair branch scope after
+`PLANNER_ACCEPTED_D6_SCOPE_EXPANSION_REPAIR`. Registration does not execute
+D6R1 or D6. The PASS recovery attestation is an ordinary trusted parent under
+the unchanged PASS-only frontier guard; raw `BLOCKED` parents, stale parents,
+sequence skips, and reusable bypasses remain rejected. Checkpoint access,
+inference, Event 06, automatic chat posting, and broader source mutation remain
+prohibited.
+
 The closed registry also includes the exact D6 checkpoint-free synthetic repack
 round-trip policy with canonical digest
 `4f8e4e2c982dc71c477da455dc0029db73d813d60d60490f9690385fbdd39bcc`.

@@ -168,3 +168,10 @@ The sanitized Sequence 9 D5R1 policy-registration recovery record is at
 [docs/dogfood/2026-08-27-d5r1-policy-registration-recovery-evidence.json](dogfood/2026-08-27-d5r1-policy-registration-recovery-evidence.json).
 It records registry qualification only; D5R1, repack, checkpoint access, and
 inference were not executed.
+
+The sanitized Sequence 13 D6R1 path-safety policy-registration recovery record
+is at
+[docs/dogfood/2026-08-28-d6r1-policy-registration-recovery-evidence.json](dogfood/2026-08-28-d6r1-policy-registration-recovery-evidence.json).
+It records closed-registry qualification through the ordinary PASS recovery
+frontier only. D6R1, D6, repack, checkpoint access, inference, Event 06, D4,
+and D5 were not executed.
