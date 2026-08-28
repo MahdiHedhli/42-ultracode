@@ -448,17 +448,37 @@ def test_json_boundaries_require_exact_builtin_bytes(parser, raw: object):  # ty
         parser(raw, req())  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("parser", [parse_handoff_authority, parse_sanitized_observation])
 @pytest.mark.parametrize(
-    "raw",
+    ("parser", "raw"),
     [
-        canonical(h()).replace(b'"sequence":17', b'"sequence":' + b"9" * 5000),
-        b'{"a":' + b"[" * 60000 + b"]" * 60000 + b"}",
+        (parse_handoff_authority, canonical(h()).replace(b'"sequence":17', b'"sequence":' + b"9" * 5000)),
+        (
+            parse_sanitized_observation,
+            canonical(o()).replace(b'"prior_sequence":17', b'"prior_sequence":' + b"9" * 5000),
+        ),
     ],
 )
 def test_json_decoder_resource_errors_are_normalized(parser, raw: bytes):  # type: ignore[no-untyped-def]
     with pytest.raises(ReadinessError, match="canonical JSON"):
         parser(raw, req())
+
+
+@pytest.mark.parametrize(
+    ("parser", "base", "needle", "prefix"),
+    [
+        (parse_handoff_authority, h, b'"feature_id":"F017"', b'"feature_id":'),
+        (parse_sanitized_observation, o, b'"feature_marker":"F017"', b'"feature_marker":'),
+    ],
+)
+def test_json_nesting_depth_sweep_never_escapes_readiness_error(  # type: ignore[no-untyped-def]
+    parser, base, needle: bytes, prefix: bytes
+):
+    original = canonical(base())
+    for depth in range(100000, 120001, 5000):
+        nested = prefix + b"[" * depth + b"0" + b"]" * depth
+        raw = original.replace(needle, nested)
+        with pytest.raises(ReadinessError):
+            parser(raw, req())
 
 
 @pytest.mark.parametrize("value", [ConfusingBytes(RESPONSE), RaisingBytes(RESPONSE), bytearray(RESPONSE)])

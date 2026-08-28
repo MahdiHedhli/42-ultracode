@@ -270,7 +270,11 @@ def _load(raw: bytes, fields: frozenset[str], label: str) -> dict[str, object]:
     if duplicate or not isinstance(value, dict):
         raise ReadinessError(f"{label} must be one duplicate-free object")
     result = cast(dict[str, object], value)
-    if set(result) != fields or _canonical(result) != raw:
+    try:
+        canonical = _canonical(result)
+    except (RecursionError, ValueError) as exc:
+        raise ReadinessError(f"{label} is not canonical JSON") from exc
+    if set(result) != fields or canonical != raw:
         raise ReadinessError(f"{label} violates the closed canonical contract")
     return result
 
