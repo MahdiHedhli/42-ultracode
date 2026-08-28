@@ -263,7 +263,9 @@ def _load(raw: bytes, fields: frozenset[str], label: str) -> dict[str, object]:
         value = cast(
             object, json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=pairs, parse_constant=_bad_constant)
         )
-    except (AttributeError, UnicodeError, json.JSONDecodeError) as exc:
+    except ReadinessError:
+        raise
+    except (AttributeError, RecursionError, ValueError) as exc:
         raise ReadinessError(f"{label} is not canonical JSON") from exc
     if duplicate or not isinstance(value, dict):
         raise ReadinessError(f"{label} must be one duplicate-free object")

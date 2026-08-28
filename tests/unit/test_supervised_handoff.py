@@ -448,6 +448,19 @@ def test_json_boundaries_require_exact_builtin_bytes(parser, raw: object):  # ty
         parser(raw, req())  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("parser", [parse_handoff_authority, parse_sanitized_observation])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        canonical(h()).replace(b'"sequence":17', b'"sequence":' + b"9" * 5000),
+        b'{"a":' + b"[" * 60000 + b"]" * 60000 + b"}",
+    ],
+)
+def test_json_decoder_resource_errors_are_normalized(parser, raw: bytes):  # type: ignore[no-untyped-def]
+    with pytest.raises(ReadinessError, match="canonical JSON"):
+        parser(raw, req())
+
+
 @pytest.mark.parametrize("value", [ConfusingBytes(RESPONSE), RaisingBytes(RESPONSE), bytearray(RESPONSE)])
 def test_verified_response_requires_exact_builtin_bytes(value: object):
     with pytest.raises(ReadinessError, match="verified response bytes"):
