@@ -247,6 +247,8 @@ def _bad_constant(_value: str) -> NoReturn:
 
 
 def _load(raw: bytes, fields: frozenset[str], label: str) -> dict[str, object]:
+    if type(raw) is not bytes:
+        raise ReadinessError(f"{label} is not canonical JSON")
     duplicate = False
 
     def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
@@ -326,7 +328,7 @@ def seal_readiness_request(
     ):
         raise ReadinessError("response identity is invalid")
     if (
-        not isinstance(verified_response_bytes, bytes)
+        type(verified_response_bytes) is not bytes
         or sha256(verified_response_bytes).hexdigest() != expected_response_sha256
     ):
         raise ReadinessError("verified response bytes do not match")

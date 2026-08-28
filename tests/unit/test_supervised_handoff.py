@@ -397,6 +397,26 @@ class RaisingText(str):
     __hash__ = str.__hash__
 
 
+class ConfusingBytes(bytes):
+    def __eq__(self, _other: object) -> bool:
+        return True
+
+    def __ne__(self, _other: object) -> bool:
+        return False
+
+    __hash__ = bytes.__hash__
+
+
+class RaisingBytes(bytes):
+    def __eq__(self, _other: object) -> bool:
+        raise RuntimeError("hostile equality must never execute")
+
+    def __ne__(self, _other: object) -> bool:
+        raise RuntimeError("hostile inequality must never execute")
+
+    __hash__ = bytes.__hash__
+
+
 @pytest.mark.parametrize("value", [ConfusingText("ATTACKER"), RaisingText("F017")])
 def test_text_fields_require_exact_builtin_str(value: str):
     with pytest.raises(ReadinessError, match="non-empty ASCII"):
@@ -409,6 +429,37 @@ def test_text_fields_require_exact_builtin_str(value: str):
             expected_response_path=PATH,
             expected_response_sha256=HASH,
             verified_response_bytes=RESPONSE,
+            route_alias_key=ROUTE,
+        )
+
+
+@pytest.mark.parametrize("parser", [parse_handoff_authority, parse_sanitized_observation])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        ConfusingBytes(b'{"not":"canonical"}\n'),
+        RaisingBytes(canonical(h())),
+        bytearray(canonical(h())),
+        object(),
+    ],
+)
+def test_json_boundaries_require_exact_builtin_bytes(parser, raw: object):  # type: ignore[no-untyped-def]
+    with pytest.raises(ReadinessError, match="canonical JSON"):
+        parser(raw, req())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [ConfusingBytes(RESPONSE), RaisingBytes(RESPONSE), bytearray(RESPONSE)])
+def test_verified_response_requires_exact_builtin_bytes(value: object):
+    with pytest.raises(ReadinessError, match="verified response bytes"):
+        seal_readiness_request(
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            prior_sequence=17,
+            current_sequence=18,
+            expected_response_commit=COMMIT,
+            expected_response_path=PATH,
+            expected_response_sha256=HASH,
+            verified_response_bytes=value,  # type: ignore[arg-type]
             route_alias_key=ROUTE,
         )
 
