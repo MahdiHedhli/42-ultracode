@@ -21,6 +21,12 @@ clean baseline, one leased worker, no aliases or checkpoint access, no D6
 execution, and a final PASS handoff. Public-safe evidence is recorded in
 `docs/dogfood/2026-08-28-d6-policy-registration-evidence.json`.
 
+Sequence 17 also runs under D4 and registers only the exact D7 readiness
+policy. Its dogfood is registry/restart qualification with inert local fixtures;
+it does not execute D7, resolve a chat-thread alias, connect to a browser, or
+post anything. The live ontology accepts D6 as synthetic Repack and reserves
+D7 for readiness only pending final planner reconciliation.
+
 ## Current automation boundary
 
 This procedure is designed for **Level C**. A person explicitly invokes the
@@ -175,3 +181,9 @@ is at
 It records closed-registry qualification through the ordinary PASS recovery
 frontier only. D6R1, D6, repack, checkpoint access, inference, Event 06, D4,
 and D5 were not executed.
+
+The sanitized Sequence 17 D7 readiness policy-registration record is at
+[docs/dogfood/2026-08-28-d7-readiness-policy-registration-evidence.json](dogfood/2026-08-28-d7-readiness-policy-registration-evidence.json).
+It records registry and restart qualification under D4 only. D7, browser/chat
+transport, alias resolution, active-loop behavior, checkpoint access, Repack,
+inference, Event execution, and P1 were not executed.

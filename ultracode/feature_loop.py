@@ -416,6 +416,7 @@ class ReviewedPromptPolicy(StrEnum):
     F017_M2_D6R1_BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR = (
         "f017-m2-d6r1-bounded-checkpoint-free-repack-path-safety-repair-v1"
     )
+    F017_M2_D7_SUPERVISED_CHAT_HANDOFF_READINESS = "f017-m2-d7-supervised-chat-handoff-readiness-v1"
 
 
 _AUTHORIZATION_FIELDS = (
@@ -443,6 +444,7 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
             {
                 "phase": "Feature-Loop-D2-policy-trust-anchor-repair",
                 "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
+                "source_repository": "MahdiHedhli/PulsarMLX",
                 "source_mutation": "PROHIBITED",
             }
         ),
@@ -450,6 +452,7 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
             {
                 "phase": "Feature-Loop-D4-checkpoint-free-repack-investigation",
                 "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_READ_ONLY",
+                "source_repository": "MahdiHedhli/PulsarMLX",
                 "source_mutation": "PROHIBITED",
             }
         ),
@@ -457,6 +460,7 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
             {
                 "phase": "Feature-Loop-D5-bounded-checkpoint-free-repack-write",
                 "human_gate": "PLANNER_ACCEPTED_D4_CHECKPOINT_FREE_WRITE",
+                "source_repository": "MahdiHedhli/PulsarMLX",
                 "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
             }
         ),
@@ -464,6 +468,7 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
             {
                 "phase": "Feature-Loop-D5R1-bounded-checkpoint-free-repack-repair",
                 "human_gate": "PLANNER_ACCEPTED_D5_SCOPE_EXPANSION_REPAIR",
+                "source_repository": "MahdiHedhli/PulsarMLX",
                 "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_DUPLICATE_ROLE_REPAIR_BRANCH_ONLY",
             }
         ),
@@ -471,6 +476,7 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
             {
                 "phase": "Feature-Loop-D6-checkpoint-free-synthetic-repack-round-trip",
                 "human_gate": "PLANNER_ACCEPTED_D5_CHECKPOINT_FREE_PLAN_QUALIFICATION",
+                "source_repository": "MahdiHedhli/PulsarMLX",
                 "source_mutation": "BOUNDED_CHECKPOINT_FREE_SYNTHETIC_REPACK_TESTS_BRANCH_ONLY",
             }
         ),
@@ -478,7 +484,16 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
             {
                 "phase": "Feature-Loop-D6R1-bounded-checkpoint-free-repack-path-safety-repair",
                 "human_gate": "PLANNER_ACCEPTED_D6_SCOPE_EXPANSION_REPAIR",
+                "source_repository": "MahdiHedhli/PulsarMLX",
                 "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR_BRANCH_ONLY",
+            }
+        ),
+        ReviewedPromptPolicy.F017_M2_D7_SUPERVISED_CHAT_HANDOFF_READINESS: MappingProxyType(
+            {
+                "phase": "Feature-Loop-D7-supervised-chat-handoff-readiness",
+                "human_gate": "PLANNER_ACCEPTED_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK",
+                "source_repository": "MahdiHedhli/42-ultracode",
+                "source_mutation": "BOUNDED_42_ONLY_SUPERVISED_CHAT_HANDOFF_READINESS",
             }
         ),
     }
@@ -514,6 +529,8 @@ class _PromptAuthorizationPolicy:
         boundary = _POLICY_BOUNDARIES.get(policy_id)
         if boundary is None or normalized["source_mutation"] != boundary["source_mutation"]:
             raise FrontierError("reviewed prompt policy has invalid policy-specific source mutation")
+        if normalized["source_repository"] != boundary["source_repository"]:
+            raise FrontierError("reviewed prompt policy has invalid policy-specific source repository")
         if normalized["phase"] != boundary["phase"]:
             raise FrontierError("reviewed prompt policy has invalid policy-specific phase")
         if normalized["human_gate"] != boundary["human_gate"]:
@@ -635,6 +652,20 @@ _REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = 
             human_gate="PLANNER_ACCEPTED_D6_SCOPE_EXPANSION_REPAIR",
             source_repository="MahdiHedhli/PulsarMLX",
             source_mutation="BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR_BRANCH_ONLY",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        ),
+        ReviewedPromptPolicy.F017_M2_D7_SUPERVISED_CHAT_HANDOFF_READINESS: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D7_SUPERVISED_CHAT_HANDOFF_READINESS,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D7-supervised-chat-handoff-readiness",
+            human_gate="PLANNER_ACCEPTED_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK",
+            source_repository="MahdiHedhli/42-ultracode",
+            source_mutation="BOUNDED_42_ONLY_SUPERVISED_CHAT_HANDOFF_READINESS",
             original_checkpoint_access="PROHIBITED",
             full_model_inference="PROHIBITED",
             automatic_chat_posting="PROHIBITED",

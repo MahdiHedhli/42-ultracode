@@ -84,6 +84,12 @@ caller-supplied authorization values.
 The D4 registration is a separate immutable registry entry whose canonical
 identity permits only checkpoint-free read-only investigation. It does not
 change the currently selected execution policy or grant D4 execution authority.
+The D7 readiness registration binds a distinct 42 source repository, readiness
+phase, planner gate, and bounded mutation scope. It retains unconditional
+checkpoint, inference, and automatic-posting prohibitions and grants no live
+browser/chat capability. Its ID and digest may be persisted in a frontier
+binding, but resolved chat aliases and browser capabilities remain invalid
+durable data.
 
 ### Durable parent identity
 

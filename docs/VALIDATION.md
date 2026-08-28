@@ -350,6 +350,16 @@ frontier path: the exact planner-authored recovery attestation is PASS, while a
 raw `BLOCKED` parent, arbitrary prose, stale identity, sequence skip, or
 reusable bypass remains rejected before lease and before alias resolution.
 
+Sequence 17 executes under D4 and registers only the D7 supervised-chat-handoff
+readiness policy. Require the exact D7 digest, all seven same-policy successes
+and 42 cross-policy rejections, independent mutation of all eleven fields,
+policy-specific source repository/phase/gate/scope rejection, universal
+checkpoint/inference/posting prohibition, durable binding after restart, and
+zero browser/chat/source/checkpoint alias resolution. Run no browser or chat
+transport. Live state treats D6 as synthetic Repack and D7 as readiness-only;
+historical stage text is not live authority and final ontology reconciliation
+remains pending planner review.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

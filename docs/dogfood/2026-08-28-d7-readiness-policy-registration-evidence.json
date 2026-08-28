@@ -1,0 +1,73 @@
+{
+  "schema": "ultracode.f017.policy-registration-evidence.v1",
+  "sequence": 17,
+  "host": {
+    "machine": "MacBook Pro M2 Max",
+    "architecture": "arm64"
+  },
+  "starting_authority": {
+    "commit": "9541f9d8dd49dd7abeeaed51cc78a7a9b33cf054",
+    "tree": "327ec8de869fab1d4e0014c65c0bde18d4d130b0"
+  },
+  "execution_policy": {
+    "policy_id": "f017-m2-d4-checkpoint-free-repack-investigation-v1",
+    "canonical_digest": "89bb8b74fadda6562eb791cf1f932de9307896e578d3f32c59688457277f59af"
+  },
+  "registered_policy": {
+    "policy_id": "f017-m2-d7-supervised-chat-handoff-readiness-v1",
+    "canonical_digest": "b982416cdb59df9eb814ecabce60d1d65d5ea708fd3535591957554274911cc2",
+    "phase": "Feature-Loop-D7-supervised-chat-handoff-readiness",
+    "human_gate": "PLANNER_ACCEPTED_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK",
+    "source_repository": "MahdiHedhli/42-ultracode",
+    "source_mutation": "BOUNDED_42_ONLY_SUPERVISED_CHAT_HANDOFF_READINESS",
+    "automatic_chat_posting": "PROHIBITED"
+  },
+  "qualification": {
+    "baseline_tests_passed": 274,
+    "final_tests_passed": 296,
+    "focused_feature_loop_tests_passed": 137,
+    "ordered_policy_checks": 49,
+    "cross_policy_rejections": 42,
+    "d7_field_mutations_rejected": 11,
+    "d7_dangerous_authority_cases_rejected": 11,
+    "ruff_format": "PASS",
+    "ruff_lint": "PASS",
+    "mypy": "PASS",
+    "pytest": "PASS",
+    "dogfood": "PASS"
+  },
+  "dogfood": {
+    "iterations": 2,
+    "events": 11,
+    "restart_reconstructed": true,
+    "final_state": "COMPLETE",
+    "manual_prompt_copy_count": 0
+  },
+  "controller": {
+    "workers": 1,
+    "aliases_resolved": 0,
+    "browser_or_chat_transports": 0,
+    "lease_state": "RELEASED_AFTER_RESULT",
+    "handoff": "PASS"
+  },
+  "stage_ontology": {
+    "live_d6": "CHECKPOINT_FREE_SYNTHETIC_REPACK_ACCEPTED",
+    "d7": "READINESS_ONLY_PENDING_PLANNER_REVIEW",
+    "historical_v1_stage_text": "NOT_LIVE_D7_AUTHORITY",
+    "active_loop": "NOT_ACCEPTED",
+    "live_supervised_delivery": "NOT_ACCEPTED"
+  },
+  "prohibited_activity": {
+    "pulsarmlx_or_r001_access": false,
+    "checkpoint_access": false,
+    "repack": false,
+    "inference": false,
+    "event_execution": false,
+    "p1": false,
+    "d7_execution": false,
+    "browser_or_chat_alias_resolution": false,
+    "browser_or_chat_transport": false,
+    "chat_posting": false,
+    "active_feature_loop": false
+  }
+}

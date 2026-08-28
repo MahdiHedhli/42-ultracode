@@ -52,6 +52,7 @@ D5_POLICY_ID = ReviewedPromptPolicy.F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WR
 D5R1_POLICY_ID = ReviewedPromptPolicy.F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR
 D6_POLICY_ID = ReviewedPromptPolicy.F017_M2_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK_ROUND_TRIP
 D6R1_POLICY_ID = ReviewedPromptPolicy.F017_M2_D6R1_BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR
+D7_POLICY_ID = ReviewedPromptPolicy.F017_M2_D7_SUPERVISED_CHAT_HANDOFF_READINESS
 AUTHORIZATION = {
     "schema": "pulsarmlx.graph-prompt/1.0.0",
     "feature_id": "F017",
@@ -93,6 +94,13 @@ D6R1_AUTHORIZATION = {
     "phase": "Feature-Loop-D6R1-bounded-checkpoint-free-repack-path-safety-repair",
     "human_gate": "PLANNER_ACCEPTED_D6_SCOPE_EXPANSION_REPAIR",
     "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_PATH_SAFETY_REPAIR_BRANCH_ONLY",
+}
+D7_AUTHORIZATION = {
+    **AUTHORIZATION,
+    "phase": "Feature-Loop-D7-supervised-chat-handoff-readiness",
+    "human_gate": "PLANNER_ACCEPTED_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK",
+    "source_repository": "MahdiHedhli/42-ultracode",
+    "source_mutation": "BOUNDED_42_ONLY_SUPERVISED_CHAT_HANDOFF_READINESS",
 }
 
 FEATURE = """\
@@ -623,7 +631,7 @@ def test_exact_d5_policy_registration_and_cross_policy_rejection(tmp_path: Path)
                 )
 
 
-def test_exact_all_six_policy_registration_and_cross_rejection(tmp_path: Path) -> None:
+def test_exact_all_seven_policy_registration_and_49_ordered_cross_checks(tmp_path: Path) -> None:
     fixtures = {
         POLICY_ID: disposable_prompt_repo(tmp_path / "d2", AUTHORIZATION),
         D4_POLICY_ID: disposable_prompt_repo(tmp_path / "d4", D4_AUTHORIZATION),
@@ -631,6 +639,7 @@ def test_exact_all_six_policy_registration_and_cross_rejection(tmp_path: Path) -
         D5R1_POLICY_ID: disposable_prompt_repo(tmp_path / "d5r1", D5R1_AUTHORIZATION),
         D6_POLICY_ID: disposable_prompt_repo(tmp_path / "d6", D6_AUTHORIZATION),
         D6R1_POLICY_ID: disposable_prompt_repo(tmp_path / "d6r1", D6R1_AUTHORIZATION),
+        D7_POLICY_ID: disposable_prompt_repo(tmp_path / "d7", D7_AUTHORIZATION),
     }
     expected = {
         POLICY_ID: "d0187ae426b82d676c5cb370be669f58e17b75eae4036597a758d40c6949446b",
@@ -639,6 +648,7 @@ def test_exact_all_six_policy_registration_and_cross_rejection(tmp_path: Path) -
         D5R1_POLICY_ID: "b2a00e4f895339c6ddf63e9c6624e0b3dfc7bdbc76d2a70ca534126227a575eb",
         D6_POLICY_ID: "4f8e4e2c982dc71c477da455dc0029db73d813d60d60490f9690385fbdd39bcc",
         D6R1_POLICY_ID: "b893948a38f56d8646cf25e0807283890ee587fff02b47b311047a6ed1904a3b",
+        D7_POLICY_ID: "b982416cdb59df9eb814ecabce60d1d65d5ea708fd3535591957554274911cc2",
     }
     identities = {}
     for policy_id, fixture in fixtures.items():
@@ -651,10 +661,13 @@ def test_exact_all_six_policy_registration_and_cross_rejection(tmp_path: Path) -
         )
         assert identity.policy_sha256 == expected[policy_id]
         identities[policy_id] = identity
+    attempts = len(fixtures)
+    rejections = 0
     for fixture_policy, fixture in fixtures.items():
         for selected_policy in fixtures:
             if fixture_policy is selected_policy:
                 continue
+            attempts += 1
             with pytest.raises(FrontierError, match="authorization mismatch"):
                 fixture.transport.verify_prompt_identity(
                     prompt_commit=fixture.prompt_commit,
@@ -663,8 +676,11 @@ def test_exact_all_six_policy_registration_and_cross_rejection(tmp_path: Path) -
                     sidecar_path=PROMPT_SIDECAR,
                     policy_id=selected_policy,
                 )
-    identity = identities[D6R1_POLICY_ID]
-    binding = FrontierBinding.from_identity(identity, result_identity="d6r1-policy-result")
+            rejections += 1
+    assert attempts == 49
+    assert rejections == 42
+    identity = identities[D7_POLICY_ID]
+    binding = FrontierBinding.from_identity(identity, result_identity="d7-readiness-policy-result")
     controller, run_id = ready_controller(tmp_path)
     artifact_id = bind_frontier(controller, run_id, binding)
     replayed = Controller(tmp_path / "controller.db").artifacts(run_id)
@@ -802,6 +818,97 @@ def test_every_d6r1_policy_field_is_bound_before_lease(tmp_path: Path, field: st
     assert git(fixture.repo, "status", "--porcelain=v1") == ""
 
 
+@pytest.mark.parametrize(("field", "replacement"), AUTHORIZATION_MUTATIONS)
+def test_every_d7_policy_field_is_bound_before_lease(tmp_path: Path, field: str, replacement: str) -> None:
+    fixture = disposable_prompt_repo(tmp_path, D7_AUTHORIZATION)
+    prompt = (
+        (fixture.repo / PROMPT_PATH)
+        .read_text()
+        .replace(f"{field}: {D7_AUTHORIZATION[field]}", f"{field}: {replacement}", 1)
+    )
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", f"mutate d7 {field}")
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    resolver = LocalAliasResolver(
+        {
+            "SOURCE_REPO_ROOT": "synthetic-source",
+            "CHECKPOINT_ROOT": "synthetic-checkpoint",
+            "CHAT_THREAD_ALIAS": "synthetic-chat",
+            "BROWSER_TRANSPORT": "synthetic-browser",
+        },
+        denied=("SOURCE_REPO_ROOT", "CHECKPOINT_ROOT", "CHAT_THREAD_ALIAS", "BROWSER_TRANSPORT"),
+    )
+    with pytest.raises(FrontierError, match=f"authorization mismatch: {field}"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=git(fixture.repo, "rev-parse", "HEAD"),
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=D7_POLICY_ID,
+        )
+    assert resolver.requests == []
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+    assert git(fixture.repo, "status", "--porcelain=v1") == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("phase", "Feature-Loop-D7-live-browser-access"),
+        ("phase", "Feature-Loop-D7-background-active-loop"),
+        ("human_gate", "AUTOMATIC_SOURCE_ISSUANCE"),
+        ("human_gate", "EVENT_06_EXECUTION"),
+        ("source_repository", "MahdiHedhli/PulsarMLX"),
+        ("source_mutation", "BROWSER_AND_CHAT_ALIAS_RESOLUTION"),
+        ("source_mutation", "BOUNDED_LIVE_CHAT_POST"),
+        ("source_mutation", "REPACK_EXECUTION"),
+        ("original_checkpoint_access", "ALLOWED"),
+        ("full_model_inference", "ALLOWED"),
+        ("automatic_chat_posting", "ALLOWED"),
+    ],
+)
+def test_d7_dangerous_authority_has_zero_lease_and_alias_requests(tmp_path: Path, field: str, replacement: str) -> None:
+    fixture = disposable_prompt_repo(tmp_path, D7_AUTHORIZATION)
+    prompt = (
+        (fixture.repo / PROMPT_PATH)
+        .read_text()
+        .replace(f"{field}: {D7_AUTHORIZATION[field]}", f"{field}: {replacement}", 1)
+    )
+    prompt_sha = sha256(prompt.encode()).hexdigest()
+    (fixture.repo / PROMPT_PATH).write_text(prompt)
+    (fixture.repo / PROMPT_SIDECAR).write_text(f"{prompt_sha}  {Path(PROMPT_PATH).name}\n")
+    git(fixture.repo, "add", PROMPT_PATH, PROMPT_SIDECAR)
+    git(fixture.repo, "commit", "-qm", "publish prohibited d7 authority")
+    controller, run_id = ready_controller(tmp_path)
+    history = controller.history(run_id)
+    resolver = LocalAliasResolver(
+        {
+            "SOURCE_REPO_ROOT": "synthetic-source",
+            "CHECKPOINT_ROOT": "synthetic-checkpoint",
+            "CHAT_THREAD_ALIAS": "synthetic-chat",
+            "BROWSER_TRANSPORT": "synthetic-browser",
+        },
+        denied=("SOURCE_REPO_ROOT", "CHECKPOINT_ROOT", "CHAT_THREAD_ALIAS", "BROWSER_TRANSPORT"),
+    )
+    with pytest.raises(FrontierError, match=f"authorization mismatch: {field}"):
+        fixture.transport.verify_prompt_identity(
+            prompt_commit=git(fixture.repo, "rev-parse", "HEAD"),
+            prompt_path=PROMPT_PATH,
+            expected_sha256=prompt_sha,
+            sidecar_path=PROMPT_SIDECAR,
+            policy_id=D7_POLICY_ID,
+        )
+    assert resolver.requests == []
+    assert controller.history(run_id) == history
+    assert controller.get_run(run_id).state is RunState.READY_FOR_CODEX
+    assert git(fixture.repo, "status", "--porcelain=v1") == ""
+
+
 def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> None:
     import ultracode.feature_loop as feature_loop
 
@@ -813,6 +920,7 @@ def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> N
         D5R1_POLICY_ID,
         D6_POLICY_ID,
         D6R1_POLICY_ID,
+        D7_POLICY_ID,
     }
     with pytest.raises(TypeError):
         registry[D4_POLICY_ID] = registry[POLICY_ID]  # type: ignore[index]
@@ -835,6 +943,7 @@ def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> N
         (D5R1_POLICY_ID, D5R1_AUTHORIZATION),
         (D6_POLICY_ID, D6_AUTHORIZATION),
         (D6R1_POLICY_ID, D6R1_AUTHORIZATION),
+        (D7_POLICY_ID, D7_AUTHORIZATION),
     ):
         for field in ("original_checkpoint_access", "full_model_inference", "automatic_chat_posting"):
             with pytest.raises(FrontierError, match="widens a prohibited capability"):
@@ -924,6 +1033,26 @@ def test_reviewed_registry_is_immutable_and_rejects_unsafe_policy_minting() -> N
         feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
             D6R1_POLICY_ID,
             **{**D6R1_AUTHORIZATION, "phase": D6_AUTHORIZATION["phase"]},
+        )
+    with pytest.raises(FrontierError, match="policy-specific source repository"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D7_POLICY_ID,
+            **{**D7_AUTHORIZATION, "source_repository": "MahdiHedhli/PulsarMLX"},
+        )
+    with pytest.raises(FrontierError, match="policy-specific source mutation"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D7_POLICY_ID,
+            **{**D7_AUTHORIZATION, "source_mutation": "BOUNDED_LIVE_CHAT_POST"},
+        )
+    with pytest.raises(FrontierError, match="unsafe human gate"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D7_POLICY_ID,
+            **{**D7_AUTHORIZATION, "human_gate": D6_AUTHORIZATION["human_gate"]},
+        )
+    with pytest.raises(FrontierError, match="policy-specific phase"):
+        feature_loop._mint_reviewed_policy(  # type: ignore[attr-defined]
+            D7_POLICY_ID,
+            **{**D7_AUTHORIZATION, "phase": D6_AUTHORIZATION["phase"]},
         )
 
 

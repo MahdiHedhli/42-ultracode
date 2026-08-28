@@ -186,3 +186,11 @@ Setup → Foundation → US1 (planner handoff) → US2 (worker result)
 - [x] T043 Add deterministic response/checksum/handoff/state publication with transport-only retry semantics.
 - [x] T044 Add disposable frontier, replay, publication, privacy, path, checkpoint-denial, and no-source-mutation tests.
 - [ ] T045 Revalidate the complete baseline, subscription transport, live F017 dry publication, and remote parity.
+
+## Phase 9: F017 D7 readiness policy registration
+
+- [x] T046 Register the exact D7 readiness ID, tuple, and canonical digest in the immutable closed registry.
+- [x] T047 Extend the registry-derived seven-policy, 49-direction substitution and eleven-field mutation tests.
+- [x] T048 Prove prohibited capabilities, wrong source/phase/gate/scope, durable restart binding, and zero alias resolution fail closed.
+- [x] T049 Record the live D6/D7 ontology distinction in active specification, validation, and dogfood guidance.
+- [x] T050 Run full qualification, dogfood, privacy review, publication, and remote-parity evidence.

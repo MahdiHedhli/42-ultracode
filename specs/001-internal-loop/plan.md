@@ -164,6 +164,17 @@ Codex loads discipline alongside Spec Kit skills.
 
 No Constitution Check violations require a complexity exception.
 
+## D7 readiness policy registration
+
+Extend only the existing immutable reviewed-policy enum, policy-specific
+boundary, closed registry, registry-derived adversarial matrix, active
+Spec Kit artifacts, validation guidance, and sanitized evidence. Bind the
+distinct 42 source repository together with phase, gate, and mutation scope.
+Do not add a browser adapter, chat transport, alias resolution, scheduler,
+controller transition, or active-loop behavior. Sequence 17 continues to
+execute under D4; D7 is registration authority for a separately prompted mock
+readiness implementation only.
+
 ## Feature Loop adapter plan
 
 Implement the F017 D0-D3 pilot as one standard-library adapter module around

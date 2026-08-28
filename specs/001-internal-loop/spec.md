@@ -2,6 +2,23 @@
 
 **Feature Branch**: `001-internal-loop`
 
+## D7 readiness policy registration addendum
+
+The closed registry includes the exact D7 supervised-chat-handoff readiness
+policy with canonical digest
+`b982416cdb59df9eb814ecabce60d1d65d5ea708fd3535591957554274911cc2`.
+It permits only a future bounded 42-owned readiness implementation after
+`PLANNER_ACCEPTED_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK`. Registration does not
+execute D7 or authorize a browser, a chat-thread alias, navigation, posting,
+active-loop watching, checkpoint access, Repack, inference, Event execution, or
+P1. Automatic chat posting remains unconditionally prohibited.
+
+Live F017 state accepts D6 as the checkpoint-free synthetic Repack
+qualification. D7 is readiness-only. Historical prompt-control v1 text that
+used D6/D7 for browser handoff is not live D7 authority; final stage-ontology
+reconciliation and any live supervised-delivery capability require separate
+planner review and a new closed policy.
+
 ## D2 Security Repair Addendum
 
 The closed registry also includes the exact D6R1 bounded checkpoint-free
