@@ -266,6 +266,46 @@ def test_uninitialized_and_mapping_proxy_forged_requests_fail_closed():
     with pytest.raises(ReadinessError, match="not sealed"):
         parse_handoff_authority(canonical(h()), forged)
 
+    legitimate = req()
+    copied = SealedReadinessRequest.__new__(SealedReadinessRequest)
+    object.__setattr__(copied, "_values", object.__getattribute__(legitimate, "_values"))
+    with pytest.raises(ReadinessError, match="not sealed"):
+        parse_handoff_authority(canonical(h()), copied)
+
+    replaced = req()
+    object.__setattr__(replaced, "_values", MappingProxyType(dict(object.__getattribute__(replaced, "_values"))))
+    with pytest.raises(ReadinessError, match="not sealed"):
+        parse_handoff_authority(canonical(h()), replaced)
+
+    assert not hasattr(legitimate, "_proof")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("kind", []),
+        ("owner_id", None),
+        ("idempotency_key", b"a" * 64),
+        ("ordinal", True),
+        ("receipt_sha256", None),
+        ("receipt_sha256", {}),
+    ],
+)
+def test_replay_revalidates_forged_event_fields(field: str, value: object):
+    prepared = dry()
+    event = make_mock_event(
+        kind=DeliveryEventKind.MOCK_RECEIPT_ACCEPTED,
+        owner_id=OWNER,
+        idempotency_key=prepared.idempotency_key,
+        ordinal=1,
+        receipt_sha256="b" * 64,
+    )
+    values = dict(object.__getattribute__(event, "_values"))
+    values[field] = value
+    object.__setattr__(event, "_values", MappingProxyType(values))
+    with pytest.raises(ReadinessError):
+        replay_mock_lifecycle(prepared, owner_id=OWNER, events=(event,))
+
 
 @pytest.mark.parametrize(
     "field",

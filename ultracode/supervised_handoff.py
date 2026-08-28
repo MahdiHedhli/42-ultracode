@@ -9,6 +9,7 @@ from enum import StrEnum
 from hashlib import sha256
 from types import MappingProxyType
 from typing import NoReturn, cast
+from weakref import WeakKeyDictionary
 
 __all__ = (
     "DeliveryEventKind",
@@ -76,29 +77,41 @@ class DeliveryEventKind(StrEnum):
 
 
 def _sealed_metaclass() -> type[type]:
-    remaining_internal_types = 7
-
     class SealedMeta(type):
         def __new__(mcls, name: str, bases: tuple[type, ...], namespace: dict[str, object], **kwargs: object) -> type:
-            nonlocal remaining_internal_types
-            if remaining_internal_types == 0:
+            if any(isinstance(base, mcls) and "_internal_sealed_root" not in vars(base) for base in bases):
                 raise ReadinessError("sealed readiness objects cannot be subclassed")
-            remaining_internal_types -= 1
             return super().__new__(mcls, name, bases, namespace, **kwargs)
 
     return SealedMeta
 
 
+def _sealed_registry() -> tuple[object, object]:
+    records: WeakKeyDictionary[object, object] = WeakKeyDictionary()
+
+    def register(record: object, values: object) -> None:
+        records[record] = values
+
+    def contains(record: object, values: object) -> bool:
+        return records.get(record) is values
+
+    return register, contains
+
+
+_register_sealed, _is_registered_sealed = _sealed_registry()
+
+
 class _Sealed(metaclass=_sealed_metaclass()):  # type: ignore[metaclass]
-    __slots__ = ("_proof", "_values")
-    _proof: object
+    __slots__ = ("__weakref__", "_values")
+    _internal_sealed_root = True
     _values: Mapping[str, object]
 
     def __init__(self, values: Mapping[str, object], *, _token: object) -> None:
         if _token is not _TOKEN:
             raise ReadinessError("object must be created by the closed boundary")
-        object.__setattr__(self, "_proof", _TOKEN)
-        object.__setattr__(self, "_values", MappingProxyType(dict(values)))
+        sealed_values = MappingProxyType(dict(values))
+        object.__setattr__(self, "_values", sealed_values)
+        _register_sealed(self, sealed_values)  # type: ignore[operator]
 
     def __setattr__(self, _name: str, _value: object) -> NoReturn:
         raise ReadinessError("sealed readiness objects are immutable")
@@ -249,11 +262,10 @@ def _require_sealed(record: object, expected: type[_Sealed]) -> _Sealed:
         raise ReadinessError("readiness object has the wrong sealed type")
     sealed = record
     try:
-        proof = sealed._proof
-        values = sealed._values
+        values = object.__getattribute__(sealed, "_values")
     except AttributeError as exc:
         raise ReadinessError("readiness object is not sealed") from exc
-    if proof is not _TOKEN or not isinstance(values, _PROXY_TYPE):
+    if not isinstance(values, _PROXY_TYPE) or not _is_registered_sealed(sealed, values):  # type: ignore[operator]
         raise ReadinessError("readiness object is not sealed")
     return sealed
 
@@ -407,9 +419,9 @@ def prepare_dry_run(
     return PreparedDryRun(payload, _token=_TOKEN)
 
 
-def make_mock_event(
-    *, kind: DeliveryEventKind, owner_id: str, idempotency_key: str, ordinal: int, receipt_sha256: str | None = None
-) -> ReadinessEvent:
+def _validate_mock_event(
+    kind: object, owner_id: object, idempotency_key: object, ordinal: object, receipt_sha256: object
+) -> tuple[DeliveryEventKind, str, str, int, str | None]:
     if (
         not isinstance(kind, DeliveryEventKind)
         or not isinstance(owner_id, str)
@@ -425,6 +437,15 @@ def make_mock_event(
             raise ReadinessError("mock receipt identity is invalid")
     elif receipt_sha256 is not None:
         raise ReadinessError("mock receipt identity is invalid")
+    return kind, owner_id, idempotency_key, ordinal, receipt_sha256
+
+
+def make_mock_event(
+    *, kind: DeliveryEventKind, owner_id: str, idempotency_key: str, ordinal: int, receipt_sha256: str | None = None
+) -> ReadinessEvent:
+    kind, owner_id, idempotency_key, ordinal, receipt_sha256 = _validate_mock_event(
+        kind, owner_id, idempotency_key, ordinal, receipt_sha256
+    )
     return ReadinessEvent(
         {
             "kind": kind,
@@ -471,15 +492,21 @@ def replay_mock_lifecycle(
     }
     for ordinal, event in enumerate(events, 1):
         _require_sealed(event, ReadinessEvent)
+        kind, event_owner, event_key, event_ordinal, receipt = _validate_mock_event(
+            _value(event, "kind"),
+            _value(event, "owner_id"),
+            _value(event, "idempotency_key"),
+            _value(event, "ordinal"),
+            _value(event, "receipt_sha256"),
+        )
         if state in {DeliveryState.MOCK_DELIVERED, DeliveryState.TERMINAL_DUPLICATE_REJECTED}:
             raise ReadinessError("terminal mock state cannot replay")
-        if (_value(event, "ordinal"), _value(event, "owner_id"), _value(event, "idempotency_key")) != (
+        if (event_ordinal, event_owner, event_key) != (
             ordinal,
             owner_id,
             prepared.idempotency_key,
         ):
             raise ReadinessError("mock event identity mismatch")
-        kind = cast(DeliveryEventKind, _value(event, "kind"))
         next_state = transitions.get((state, kind))
         if next_state is None:
             raise ReadinessError("illegal or duplicate mock transition")
@@ -490,7 +517,7 @@ def replay_mock_lifecycle(
                 "ordinal": ordinal,
                 "owner_id": owner_id,
                 "idempotency_key": prepared.idempotency_key,
-                "receipt_sha256": _value(event, "receipt_sha256"),
+                "receipt_sha256": receipt,
             }
         )
     return DeliverySnapshot({"state": state, "event_log_sha256": sha256(_canonical(ledger)).hexdigest()}, _token=_TOKEN)
