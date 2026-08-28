@@ -23,12 +23,32 @@ def _route(root: Path) -> Path:
     return path
 
 
+def _confirmed(preview: DeliveryPreview) -> object:
+    rendered = io.StringIO()
+
+    class Input(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+        def readline(self, _size: int = -1) -> str:
+            challenge = rendered.getvalue().rsplit("confirmation-challenge: ", 1)
+            assert len(challenge) == 2
+            return challenge[1].splitlines()[0] + "\n"
+
+    class Output(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    rendered = Output()
+    return delivery.confirm_preview(preview, input_stream=Input(), output_stream=rendered)
+
+
 def _run(root: Path, transcript: bytes | None = None) -> tuple[DeliveryOutcome, delivery._JsonlSession, bytes]:
     preview = DeliveryPreview("SYNTHETIC_TARGET", b"synthetic supervised delivery")
     writer = io.BytesIO()
     outcome, session = delivery._perform(
         preview=preview,
-        capability=delivery._test_capability(preview),
+        capability=_confirmed(preview),
         route_registry=_route(root),
         journal_path=root / "journal.jsonl",
         streams=(io.BytesIO(transcript or delivery._fake_transcript()), writer),
@@ -99,9 +119,9 @@ def test_confirmation_uses_tty_exact_preview_and_one_use() -> None:
     thread.join(timeout=5)
     assert not thread.is_alive()
     capability = captured["capability"]
-    capability.consume(preview)  # type: ignore[attr-defined]
+    delivery._consume_capability(capability, preview)  # type: ignore[operator]
     with pytest.raises(DeliveryError, match="already consumed"):
-        capability.consume(preview)  # type: ignore[attr-defined]
+        delivery._consume_capability(capability, preview)  # type: ignore[operator]
     reader.close()
     writer.close()
     os.close(master_fd)
@@ -113,6 +133,12 @@ def test_confirmation_rejects_non_tty_before_route_resolution(tmp_path: Path) ->
     with pytest.raises(DeliveryError, match="interactive TTY"):
         delivery.confirm_preview(preview, input_stream=io.StringIO("x\n"), output_stream=io.StringIO())
     assert not (tmp_path / "routes.json").exists()
+
+
+def test_preview_escapes_terminal_control_sequences() -> None:
+    rendered = DeliveryPreview("SYNTHETIC_TARGET", b"safe\x1b[2J\r\n").render()
+    assert "\x1b" not in rendered
+    assert "\\u001b[2J\\r\\n" in rendered
 
 
 @pytest.mark.parametrize(

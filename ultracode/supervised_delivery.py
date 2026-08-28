@@ -18,6 +18,7 @@ from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 from typing import BinaryIO, NoReturn, SupportsIndex, TextIO, cast
+from weakref import WeakKeyDictionary
 
 __all__ = (
     "APP_SERVER_ARGV",
@@ -33,7 +34,6 @@ __all__ = (
 D8_POLICY_ID = "f017-m2-d8-supervised-chat-delivery-transport-v1"
 D8_POLICY_SHA256 = "db58a1e73a934719f4df7b9e07a4217a289cb8f4b3b748ce16a0e537df8036b6"
 APP_SERVER_ARGV = ("codex", "app-server", "--listen", "stdio://")
-_TOKEN = object()
 _MAX_MESSAGE_BYTES = 64 * 1024
 _MAX_LINE_BYTES = 1024 * 1024
 _SYMBOL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
@@ -158,47 +158,79 @@ class DeliveryPreview:
             f"target-alias: {self.target_alias}\n"
             f"payload-sha256: {self.payload_sha256}\n"
             f"payload-bytes: {len(self.message)}\n"
-            "--- exact payload begin ---\n"
-            f"{text}\n"
-            "--- exact payload end ---"
+            "exact-payload-json: "
+            f"{json.dumps(text, ensure_ascii=True)}"
         )
 
 
-class _ConfirmationCapability:
-    __slots__ = ("_alias", "_expires_at", "_lock", "_preview_sha256", "_used")
+def _confirmation_boundary() -> tuple[object, object]:
+    token = object()
+    records: WeakKeyDictionary[object, tuple[str, str, float, list[bool], threading.Lock]] = WeakKeyDictionary()
 
-    def __init__(self, *, preview_sha256: str, alias: str, expires_at: float, token: object) -> None:
-        if token is not _TOKEN:
-            raise DeliveryError("capability constructor is closed")
-        self._preview_sha256 = preview_sha256
-        self._alias = alias
-        self._expires_at = expires_at
-        self._used = False
-        self._lock = threading.Lock()
+    class Capability:
+        __slots__ = ("__weakref__",)
 
-    def __copy__(self) -> NoReturn:
-        raise DeliveryError("capability cannot be copied")
+        def __init__(self, *, preview: DeliveryPreview, expires_at: float, authority: object) -> None:
+            if authority is not token:
+                raise DeliveryError("capability constructor is closed")
+            records[self] = (preview.preview_sha256, preview.target_alias, expires_at, [False], threading.Lock())
 
-    def __deepcopy__(self, _memo: object) -> NoReturn:
-        raise DeliveryError("capability cannot be copied")
+        def __copy__(self) -> NoReturn:
+            raise DeliveryError("capability cannot be copied")
 
-    def __reduce__(self) -> NoReturn:
-        raise DeliveryError("capability cannot be serialized")
+        def __deepcopy__(self, _memo: object) -> NoReturn:
+            raise DeliveryError("capability cannot be copied")
 
-    def __reduce_ex__(self, _protocol: SupportsIndex) -> NoReturn:
-        raise DeliveryError("capability cannot be serialized")
+        def __reduce__(self) -> NoReturn:
+            raise DeliveryError("capability cannot be serialized")
 
-    def consume(self, preview: DeliveryPreview) -> None:
-        if type(preview) is not DeliveryPreview:
-            raise DeliveryError("capability requires the exact preview type")
-        with self._lock:
-            if self._used:
+        def __reduce_ex__(self, _protocol: SupportsIndex) -> NoReturn:
+            raise DeliveryError("capability cannot be serialized")
+
+    def confirm(
+        preview: DeliveryPreview,
+        input_stream: TextIO,
+        output_stream: TextIO,
+        ttl_seconds: int,
+    ) -> object:
+        if type(preview) is not DeliveryPreview or type(ttl_seconds) is not int or not (1 <= ttl_seconds <= 300):
+            raise DeliveryError("confirmation arguments violate the closed contract")
+        try:
+            input_tty = input_stream.isatty()
+            output_tty = output_stream.isatty()
+        except (AttributeError, OSError) as exc:
+            raise DeliveryError("confirmation requires terminal streams") from exc
+        if not input_tty or not output_tty:
+            raise DeliveryError("confirmation requires an interactive TTY")
+        challenge = secrets.token_hex(8).upper()
+        output_stream.write(preview.render())
+        output_stream.write(f"\nconfirmation-challenge: {challenge}\nre-enter challenge exactly: ")
+        output_stream.flush()
+        answer = input_stream.readline(128)
+        if answer not in {challenge + "\n", challenge + "\r\n"}:
+            raise DeliveryError("confirmation challenge mismatch")
+        return Capability(preview=preview, expires_at=time.monotonic() + ttl_seconds, authority=token)
+
+    def consume(capability: object, preview: DeliveryPreview) -> None:
+        if type(preview) is not DeliveryPreview or type(capability) is not Capability:
+            raise DeliveryError("capability is not sealed by the confirmation boundary")
+        record = records.get(capability)
+        if record is None:
+            raise DeliveryError("capability is not sealed by the confirmation boundary")
+        preview_sha256, alias, expires_at, used, lock = record
+        with lock:
+            if used[0]:
                 raise DeliveryError("confirmation capability was already consumed")
-            self._used = True
-            if time.monotonic() > self._expires_at:
+            used[0] = True
+            if time.monotonic() > expires_at:
                 raise DeliveryError("confirmation capability expired")
-            if (preview.preview_sha256, preview.target_alias) != (self._preview_sha256, self._alias):
+            if (preview.preview_sha256, preview.target_alias) != (preview_sha256, alias):
                 raise DeliveryError("confirmation capability does not match the preview")
+
+    return confirm, consume
+
+
+_confirm_capability, _consume_capability = _confirmation_boundary()
 
 
 def confirm_preview(
@@ -207,30 +239,12 @@ def confirm_preview(
     input_stream: TextIO,
     output_stream: TextIO,
     ttl_seconds: int = 60,
-) -> _ConfirmationCapability:
+) -> object:
     """Require exact re-entry of a fresh TTY challenge for one preview."""
-    if type(preview) is not DeliveryPreview or type(ttl_seconds) is not int or not (1 <= ttl_seconds <= 300):
-        raise DeliveryError("confirmation arguments violate the closed contract")
-    try:
-        input_tty = input_stream.isatty()
-        output_tty = output_stream.isatty()
-    except (AttributeError, OSError) as exc:
-        raise DeliveryError("confirmation requires terminal streams") from exc
-    if not input_tty or not output_tty:
-        raise DeliveryError("confirmation requires an interactive TTY")
-    challenge = secrets.token_hex(8).upper()
-    output_stream.write(preview.render())
-    output_stream.write(f"\nconfirmation-challenge: {challenge}\nre-enter challenge exactly: ")
-    output_stream.flush()
-    answer = input_stream.readline(128)
-    if answer not in {challenge + "\n", challenge + "\r\n"}:
-        raise DeliveryError("confirmation challenge mismatch")
-    return _ConfirmationCapability(
-        preview_sha256=preview.preview_sha256,
-        alias=preview.target_alias,
-        expires_at=time.monotonic() + ttl_seconds,
-        token=_TOKEN,
-    )
+    confirm = _confirm_capability
+    if not callable(confirm):
+        raise DeliveryError("confirmation boundary is unavailable")
+    return confirm(preview, input_stream, output_stream, ttl_seconds)
 
 
 def _read_owned_regular(path: Path, *, max_bytes: int) -> bytes:
@@ -269,7 +283,13 @@ def _resolve_alias(path: Path, alias: str) -> str:
     if any(type(key) is not str or type(value) is not str for key, value in aliases.items()):
         raise DeliveryError("route registry entries must be strings")
     thread_id = aliases.get(alias)
-    if type(thread_id) is not str or not thread_id or len(thread_id) > 256 or not thread_id.isascii():
+    safe_thread_chars = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+    if (
+        type(thread_id) is not str
+        or not thread_id
+        or len(thread_id) > 256
+        or any(char not in safe_thread_chars for char in thread_id)
+    ):
         raise DeliveryError("target alias is missing or invalid")
     return thread_id
 
@@ -285,21 +305,26 @@ class _Journal:
     def __enter__(self) -> _Journal:
         flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         self._fd = os.open(self._path, flags, 0o600)
-        fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        info = os.fstat(self._fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise DeliveryError("journal ownership or mode is unsafe")
-        os.lseek(self._fd, 0, os.SEEK_SET)
-        raw = b""
-        while True:
-            chunk = os.read(self._fd, 65536)
-            if not chunk:
-                break
-            raw += chunk
-            if len(raw) > 8 * 1024 * 1024:
-                raise DeliveryError("journal exceeds the bounded size")
-        self._records = self._validate(raw)
-        return self
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            info = os.fstat(self._fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise DeliveryError("journal ownership or mode is unsafe")
+            os.lseek(self._fd, 0, os.SEEK_SET)
+            raw = b""
+            while True:
+                chunk = os.read(self._fd, 65536)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > 8 * 1024 * 1024:
+                    raise DeliveryError("journal exceeds the bounded size")
+            self._records = self._validate(raw)
+            return self
+        except BaseException:
+            os.close(self._fd)
+            self._fd = -1
+            raise
 
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
         if self._fd >= 0:
@@ -530,13 +555,16 @@ class _CodexProcess:
 def _perform(
     *,
     preview: DeliveryPreview,
-    capability: _ConfirmationCapability,
+    capability: object,
     route_registry: Path,
     journal_path: Path,
     streams: tuple[BinaryIO, BinaryIO] | None = None,
     attempt_id: str | None = None,
 ) -> tuple[DeliveryOutcome, _JsonlSession | None]:
-    capability.consume(preview)
+    consume = _consume_capability
+    if not callable(consume):
+        raise DeliveryError("confirmation boundary is unavailable")
+    consume(capability, preview)
     thread_id = _resolve_alias(route_registry, preview.target_alias)
     attempt = attempt_id or secrets.token_hex(16)
     with _Journal(journal_path) as journal:
@@ -590,16 +618,6 @@ def deliver_foreground(
     return outcome
 
 
-def _test_capability(preview: DeliveryPreview) -> _ConfirmationCapability:
-    """Private deterministic test seam; never exported or used by the CLI."""
-    return _ConfirmationCapability(
-        preview_sha256=preview.preview_sha256,
-        alias=preview.target_alias,
-        expires_at=time.monotonic() + 60,
-        token=_TOKEN,
-    )
-
-
 def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
     turn = {"id": "synthetic-turn", "items": [], "status": "inProgress"}
     completed = dict(turn)
@@ -635,11 +653,45 @@ def _qualify_fake_peer(root: Path) -> dict[str, object]:
     route.write_bytes(_canonical({"aliases": {"SYNTHETIC_TARGET": "synthetic-thread"}, "version": 1}))
     route.chmod(0o600)
     preview = DeliveryPreview(target_alias="SYNTHETIC_TARGET", message=b"synthetic supervised delivery")
+
+    class SyntheticInput:
+        def isatty(self) -> bool:
+            return True
+
+        def readline(self, _size: int | None = -1) -> str:
+            match = rendered.getvalue().rsplit("confirmation-challenge: ", 1)
+            if len(match) != 2:
+                raise DeliveryError("synthetic challenge was not rendered")
+            return match[1].splitlines()[0] + "\n"
+
+    class SyntheticOutput:
+        def __init__(self) -> None:
+            self._buffer = io.StringIO()
+
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, value: str) -> int:
+            return self._buffer.write(value)
+
+        def flush(self) -> None:
+            self._buffer.flush()
+
+        def getvalue(self) -> str:
+            return self._buffer.getvalue()
+
+    output = SyntheticOutput()
+    rendered = output
+    capability = confirm_preview(
+        preview,
+        input_stream=cast(TextIO, SyntheticInput()),
+        output_stream=cast(TextIO, output),
+    )
     reader = io.BytesIO(_fake_transcript())
     writer = io.BytesIO()
     outcome, session = _perform(
         preview=preview,
-        capability=_test_capability(preview),
+        capability=capability,
         route_registry=route,
         journal_path=root / "journal.jsonl",
         streams=(reader, writer),
