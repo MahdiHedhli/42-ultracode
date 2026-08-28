@@ -132,3 +132,12 @@ any non-terminal state → STOPPED
 `HUMAN_REQUIRED`, `FAILED`, `COMPLETE`, and `STOPPED` are terminal in v0.1.
 Pause preserves the safe resume target in its event payload. Replaying all events
 is the canonical way to derive state; the `runs` row is a query cache.
+
+## D7 readiness-only sealed data
+
+The sealed request retains only public response identity, F017 machine/sequence,
+and an unresolved symbolic route key. Canonical handoff and sanitized observation
+objects feed an immutable dry record with posture `READINESS_ONLY_NOT_DELIVERABLE`,
+capability `ABSENT`, and deterministic hashes. Closed mock events reconstruct a
+snapshot from immutable history. No record contains a resolved route or live
+transport capability.

@@ -184,3 +184,18 @@ new runtime dependency. Publication uses adjacent atomic files in deterministic
 order, while Git commit/push and aliased notification remain explicit transport
 steps. All tests use disposable repositories, temporary databases, synthetic
 content, and a denied checkpoint alias.
+
+## D7 pure readiness architecture
+
+```text
+Git-authoritative response and handoff -> pure authority validation
+  -> unresolved symbolic route -> sanitized mock observation
+  -> deterministic dry preparation -> inert lifecycle replay
+  -> READINESS_ONLY stop
+```
+
+`ultracode/supervised_handoff.py` is standard-library-only and independent of
+controller and transport modules. Canonical JSON, sealed values, exact identity
+comparisons, closed events, and an AST/import/API census address URL ambiguity,
+identity substitution, privacy exfiltration, capability injection, duplicate or
+uncertain delivery, restart replay, and TOCTOU drift.

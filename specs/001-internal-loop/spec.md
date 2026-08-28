@@ -328,3 +328,13 @@ leases, idempotency, lifecycle, role separation, and iteration ceilings.
 This extension does not add automatic ChatGPT posting, cloud queues, a generic
 workflow engine, checkpoint access, source-repository mutation, or a new
 controller state machine.
+
+## D7 supervised handoff readiness implementation
+
+Sequence 18 adds one separate pure readiness boundary. It accepts only an already
+Git-verified response identity, a canonical allowlisted handoff, an unresolved
+symbolic route key, and a canonical `MOCK_LOCAL_ONLY` observation. It prepares
+inert deterministic data and replays closed mock events. It exposes no network,
+browser, shell, accessibility, Apple Events, connector, callback, alias-resolution,
+posting, or dynamic-loading surface. `MOCK_DELIVERED` is simulation only; Git
+publication remains authoritative and D7 grants no active-loop authority.

@@ -366,3 +366,12 @@ For each release candidate or dogfood run, record the date, commit, environment
 versions, commands actually executed, pass/fail result, run IDs, automation
 level, and remaining manual interventions. Link the record to the relevant ADR
 or issue if the result changes a capability claim.
+
+## Sequence 18 D7 readiness validation
+
+Require twenty deterministic reconstructions, canonical handoff/observation and
+URL mutation coverage, raw-content rejection, zero alias or live-transport calls,
+sealed-object denial, restart/retry/terminal tests, and a load-bearing
+AST/import/public-API census. `MOCK_DELIVERED` is simulation only. A detached
+read-only security review of the final commit must close every in-scope actionable
+finding before publication.

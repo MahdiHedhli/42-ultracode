@@ -194,3 +194,12 @@ Setup → Foundation → US1 (planner handoff) → US2 (worker result)
 - [x] T048 Prove prohibited capabilities, wrong source/phase/gate/scope, durable restart binding, and zero alias resolution fail closed.
 - [x] T049 Record the live D6/D7 ontology distinction in active specification, validation, and dogfood guidance.
 - [x] T050 Run full qualification, dogfood, privacy review, publication, and remote-parity evidence.
+
+## Phase 10: F017 D7 supervised handoff readiness implementation
+
+- [x] T051 Specify the pure readiness data flow, threat model, and closed API.
+- [x] T052 Implement canonical handoff and sanitized observation validation.
+- [x] T053 Implement sealed dry preparation and inert mock lifecycle replay.
+- [x] T054 Add identity, URL, privacy, restart, retry, and serialization tests.
+- [x] T055 Add load-bearing AST/import/public-API capability denial tests.
+- [ ] T056 Run qualification, detached review, dogfood, privacy, publication, and parity.

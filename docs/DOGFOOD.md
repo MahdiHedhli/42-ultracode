@@ -187,3 +187,10 @@ The sanitized Sequence 17 D7 readiness policy-registration record is at
 It records registry and restart qualification under D4 only. D7, browser/chat
 transport, alias resolution, active-loop behavior, checkpoint access, Repack,
 inference, Event execution, and P1 were not executed.
+
+## Sequence 18 D7 readiness dogfood
+
+Use synthetic canonical handoffs, symbolic unresolved route keys, sanitized mock
+observations, and inert events only. Do not read a browser, page, conversation,
+clipboard, accessibility surface, or live route. `MOCK_DELIVERED` is simulated and
+cannot support a posting claim; the GitHub response remains authoritative.
