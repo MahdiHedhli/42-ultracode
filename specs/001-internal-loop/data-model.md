@@ -141,3 +141,10 @@ objects feed an immutable dry record with posture `READINESS_ONLY_NOT_DELIVERABL
 capability `ABSENT`, and deterministic hashes. Closed mock events reconstruct a
 snapshot from immutable history. No record contains a resolved route or live
 transport capability.
+
+The seal is a public-API integrity boundary, not an in-process Python sandbox.
+It rejects direct construction, replacement, and mutation through supported
+public operations and detects backing-map mutation before use. Code already
+authorized to perform arbitrary same-process private introspection can recover
+module internals and is therefore inside the trusted process boundary, not an
+untrusted caller the seal claims to isolate.

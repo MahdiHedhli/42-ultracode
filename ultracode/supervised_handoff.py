@@ -87,13 +87,20 @@ def _sealed_metaclass() -> type[type]:
 
 
 def _sealed_registry() -> tuple[object, object]:
-    records: WeakKeyDictionary[object, object] = WeakKeyDictionary()
+    records: WeakKeyDictionary[object, tuple[object, bytes]] = WeakKeyDictionary()
 
     def register(record: object, values: object) -> None:
-        records[record] = values
+        records[record] = (values, sha256(_canonical(dict(cast(Mapping[str, object], values)))).digest())
 
     def contains(record: object, values: object) -> bool:
-        return records.get(record) is values
+        registered = records.get(record)
+        if registered is None or registered[0] is not values:
+            return False
+        try:
+            current_digest = sha256(_canonical(dict(cast(Mapping[str, object], values)))).digest()
+        except Exception as exc:
+            raise ReadinessError("readiness object is not sealed") from exc
+        return registered[1] == current_digest
 
     return register, contains
 
@@ -112,6 +119,19 @@ class _Sealed(metaclass=_sealed_metaclass()):  # type: ignore[metaclass]
         sealed_values = MappingProxyType(dict(values))
         object.__setattr__(self, "_values", sealed_values)
         _register_sealed(self, sealed_values)  # type: ignore[operator]
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        allowed = {
+            "DeliverySnapshot",
+            "HandoffAuthority",
+            "PreparedDryRun",
+            "ReadinessEvent",
+            "SanitizedObservation",
+            "SealedReadinessRequest",
+        }
+        if cls.__bases__ != (_Sealed,) or cls.__module__ != __name__ or cls.__name__ not in allowed:
+            raise ReadinessError("sealed readiness objects cannot be subclassed")
+        super().__init_subclass__(**kwargs)
 
     def __setattr__(self, _name: str, _value: object) -> NoReturn:
         raise ReadinessError("sealed readiness objects are immutable")
@@ -282,6 +302,10 @@ def seal_readiness_request(
     verified_response_bytes: bytes,
     route_alias_key: str,
 ) -> SealedReadinessRequest:
+    feature_id = _text(feature_id, "feature_id")
+    machine_model = _text(machine_model, "machine_model")
+    prior_sequence = _integer(prior_sequence, "prior_sequence")
+    current_sequence = _integer(current_sequence, "current_sequence")
     if (feature_id, machine_model, prior_sequence, current_sequence) != ("F017", "MacBook Pro M2 Max", 17, 18):
         raise ReadinessError("frontier identity mismatch")
     if not isinstance(expected_response_path, str):

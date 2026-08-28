@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import json
 import pickle
 from hashlib import sha256
@@ -238,6 +239,32 @@ def test_seal_rejects_nonstring_regex_inputs(field: str, value: object):
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("feature_id", object()),
+        ("machine_model", b"MacBook Pro M2 Max"),
+        ("prior_sequence", True),
+        ("current_sequence", 18.0),
+    ],
+)
+def test_frontier_identity_requires_exact_types(field: str, value: object):
+    arguments: dict[str, object] = {
+        "feature_id": "F017",
+        "machine_model": "MacBook Pro M2 Max",
+        "prior_sequence": 17,
+        "current_sequence": 18,
+        "expected_response_commit": COMMIT,
+        "expected_response_path": PATH,
+        "expected_response_sha256": HASH,
+        "verified_response_bytes": RESPONSE,
+        "route_alias_key": ROUTE,
+    }
+    arguments[field] = value
+    with pytest.raises(ReadinessError):
+        seal_readiness_request(**arguments)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
     ("owner_id", "idempotency_key"),
     [(None, "a" * 64), (OWNER, b"a" * 64)],
 )
@@ -278,6 +305,40 @@ def test_uninitialized_and_mapping_proxy_forged_requests_fail_closed():
         parse_handoff_authority(canonical(h()), replaced)
 
     assert not hasattr(legitimate, "_proof")
+
+
+def test_mapping_proxy_backing_dict_mutation_invalidates_seal():
+    request = req()
+    proxy = object.__getattribute__(request, "_values")
+    backing = next(item for item in gc.get_referents(proxy) if isinstance(item, dict))
+    backing["response_url"] = "https://attacker.example/payload"
+    with pytest.raises(ReadinessError, match="not sealed"):
+        parse_handoff_authority(canonical(h()), request)
+
+    prepared = dry()
+    event = make_mock_event(
+        kind=DeliveryEventKind.PREPARE,
+        owner_id=OWNER,
+        idempotency_key=prepared.idempotency_key,
+        ordinal=1,
+    )
+    event_proxy = object.__getattribute__(event, "_values")
+    event_backing = next(item for item in gc.get_referents(event_proxy) if isinstance(item, dict))
+    event_backing["kind"] = DeliveryEventKind.MOCK_RECEIPT_ACCEPTED
+    event_backing["receipt_sha256"] = "b" * 64
+    with pytest.raises(ReadinessError, match="not sealed"):
+        replay_mock_lifecycle(prepared, owner_id=OWNER, events=(event,))
+
+
+def test_metaclass_subclass_cannot_bypass_subclass_guard():
+    sealed_meta = type(SealedReadinessRequest)
+
+    class BypassMeta(sealed_meta):
+        def __new__(mcls, name, bases, namespace, **kwargs):  # type: ignore[no-untyped-def]
+            return type.__new__(mcls, name, bases, namespace, **kwargs)
+
+    with pytest.raises(ReadinessError, match="cannot be subclassed"):
+        BypassMeta("Evil", (SealedReadinessRequest,), {"__slots__": ()})
 
 
 @pytest.mark.parametrize(
