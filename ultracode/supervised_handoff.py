@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from hashlib import sha256
 from types import MappingProxyType
@@ -29,7 +29,6 @@ __all__ = (
     "seal_readiness_request",
 )
 _TOKEN = object()
-_PROXY_TYPE: type[object] = type(MappingProxyType({}))
 _SHA = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SYMBOL = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
@@ -86,39 +85,43 @@ def _sealed_metaclass() -> type[type]:
     return SealedMeta
 
 
-def _sealed_registry() -> tuple[object, object]:
-    records: WeakKeyDictionary[object, tuple[object, bytes]] = WeakKeyDictionary()
+def _sealed_registry() -> tuple[
+    Callable[[object, Mapping[str, object]], None],
+    Callable[[object, type[object]], Mapping[str, object]],
+]:
+    records: WeakKeyDictionary[object, tuple[Mapping[str, object], type[object], bytes]] = WeakKeyDictionary()
 
-    def register(record: object, values: object) -> None:
-        records[record] = (values, sha256(_canonical(dict(cast(Mapping[str, object], values)))).digest())
+    def register(record: object, values: Mapping[str, object]) -> None:
+        records[record] = (values, type(record), sha256(_canonical(dict(values))).digest())
 
-    def contains(record: object, values: object) -> bool:
+    def values_for(record: object, expected: type[object]) -> Mapping[str, object]:
         registered = records.get(record)
-        if registered is None or registered[0] is not values:
-            return False
+        if registered is None or registered[1] is not expected or type(record) is not expected:
+            raise ReadinessError("readiness object is not sealed")
+        values = registered[0]
         try:
-            current_digest = sha256(_canonical(dict(cast(Mapping[str, object], values)))).digest()
+            current_digest = sha256(_canonical(dict(values))).digest()
         except Exception as exc:
             raise ReadinessError("readiness object is not sealed") from exc
-        return registered[1] == current_digest
+        if registered[2] != current_digest:
+            raise ReadinessError("readiness object is not sealed")
+        return values
 
-    return register, contains
+    return register, values_for
 
 
-_register_sealed, _is_registered_sealed = _sealed_registry()
+_register_sealed, _registered_values = _sealed_registry()
 
 
 class _Sealed(metaclass=_sealed_metaclass()):  # type: ignore[metaclass]
-    __slots__ = ("__weakref__", "_values")
+    __slots__ = ("__weakref__",)
     _internal_sealed_root = True
-    _values: Mapping[str, object]
 
     def __init__(self, values: Mapping[str, object], *, _token: object) -> None:
         if _token is not _TOKEN:
             raise ReadinessError("object must be created by the closed boundary")
         sealed_values = MappingProxyType(dict(values))
-        object.__setattr__(self, "_values", sealed_values)
-        _register_sealed(self, sealed_values)  # type: ignore[operator]
+        _register_sealed(self, sealed_values)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         allowed = {
@@ -136,6 +139,9 @@ class _Sealed(metaclass=_sealed_metaclass()):  # type: ignore[metaclass]
     def __setattr__(self, _name: str, _value: object) -> NoReturn:
         raise ReadinessError("sealed readiness objects are immutable")
 
+    def __delattr__(self, _name: str) -> NoReturn:
+        raise ReadinessError("sealed readiness objects are immutable")
+
     def __copy__(self) -> NoReturn:
         raise ReadinessError("sealed readiness objects cannot be copied")
 
@@ -147,6 +153,10 @@ class _Sealed(metaclass=_sealed_metaclass()):  # type: ignore[metaclass]
 
     def __reduce_ex__(self, _protocol: object) -> NoReturn:
         raise ReadinessError("sealed readiness objects cannot be serialized")
+
+    @property
+    def _values(self) -> Mapping[str, object]:
+        return _registered_values(self, type(self))
 
     def _get(self, key: str) -> object:
         return self._values[key]
@@ -262,7 +272,7 @@ def _load(raw: bytes, fields: frozenset[str], label: str) -> dict[str, object]:
 
 
 def _text(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value or not value.isascii():
+    if type(value) is not str or not value or not value.isascii():
         raise ReadinessError(f"{field} must be non-empty ASCII")
     return value
 
@@ -281,12 +291,7 @@ def _require_sealed(record: object, expected: type[_Sealed]) -> _Sealed:
     if type(record) is not expected:
         raise ReadinessError("readiness object has the wrong sealed type")
     sealed = record
-    try:
-        values = object.__getattribute__(sealed, "_values")
-    except AttributeError as exc:
-        raise ReadinessError("readiness object is not sealed") from exc
-    if not isinstance(values, _PROXY_TYPE) or not _is_registered_sealed(sealed, values):  # type: ignore[operator]
-        raise ReadinessError("readiness object is not sealed")
+    _registered_values(sealed, expected)
     return sealed
 
 
@@ -308,13 +313,13 @@ def seal_readiness_request(
     current_sequence = _integer(current_sequence, "current_sequence")
     if (feature_id, machine_model, prior_sequence, current_sequence) != ("F017", "MacBook Pro M2 Max", 17, 18):
         raise ReadinessError("frontier identity mismatch")
-    if not isinstance(expected_response_path, str):
+    if type(expected_response_path) is not str:
         raise ReadinessError("response identity is invalid")
     match = _PATH.fullmatch(expected_response_path)
     if (
-        not isinstance(expected_response_commit, str)
+        type(expected_response_commit) is not str
         or not _COMMIT.fullmatch(expected_response_commit)
-        or not isinstance(expected_response_sha256, str)
+        or type(expected_response_sha256) is not str
         or not _SHA.fullmatch(expected_response_sha256)
         or match is None
         or int(match.group("s")) != 17
@@ -325,7 +330,7 @@ def seal_readiness_request(
         or sha256(verified_response_bytes).hexdigest() != expected_response_sha256
     ):
         raise ReadinessError("verified response bytes do not match")
-    if not isinstance(route_alias_key, str) or not _SYMBOL.fullmatch(route_alias_key):
+    if type(route_alias_key) is not str or not _SYMBOL.fullmatch(route_alias_key):
         raise ReadinessError("route key must remain symbolic")
     url = f"https://github.com/MahdiHedhli/PulsarMLX-Prompts/blob/{expected_response_commit}/{expected_response_path}"
     return SealedReadinessRequest(
@@ -448,16 +453,16 @@ def _validate_mock_event(
 ) -> tuple[DeliveryEventKind, str, str, int, str | None]:
     if (
         not isinstance(kind, DeliveryEventKind)
-        or not isinstance(owner_id, str)
+        or type(owner_id) is not str
         or not _SYMBOL.fullmatch(owner_id)
-        or not isinstance(idempotency_key, str)
+        or type(idempotency_key) is not str
         or not _SHA.fullmatch(idempotency_key)
         or type(ordinal) is not int
         or ordinal < 1
     ):
         raise ReadinessError("mock event identity is invalid")
     if kind is DeliveryEventKind.MOCK_RECEIPT_ACCEPTED:
-        if not isinstance(receipt_sha256, str) or not _SHA.fullmatch(receipt_sha256):
+        if type(receipt_sha256) is not str or not _SHA.fullmatch(receipt_sha256):
             raise ReadinessError("mock receipt identity is invalid")
     elif receipt_sha256 is not None:
         raise ReadinessError("mock receipt identity is invalid")
@@ -486,7 +491,7 @@ def replay_mock_lifecycle(
     prepared: PreparedDryRun, *, owner_id: str, events: tuple[ReadinessEvent, ...]
 ) -> DeliverySnapshot:
     _require_sealed(prepared, PreparedDryRun)
-    if not isinstance(owner_id, str) or not _SYMBOL.fullmatch(owner_id) or not isinstance(events, tuple):
+    if type(owner_id) is not str or not _SYMBOL.fullmatch(owner_id) or type(events) is not tuple:
         raise ReadinessError("mock owner or history is invalid")
     state = DeliveryState.UNPREPARED
     ledger: list[dict[str, object]] = []

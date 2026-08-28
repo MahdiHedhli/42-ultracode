@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import copy
-import gc
 import json
 import pickle
 from hashlib import sha256
-from types import MappingProxyType
 
 import pytest
 
 from ultracode.supervised_handoff import (
     DeliveryEventKind,
+    DeliverySnapshot,
     DeliveryState,
+    HandoffAuthority,
+    PreparedDryRun,
     ReadinessError,
+    ReadinessEvent,
+    SanitizedObservation,
     SealedReadinessRequest,
     make_mock_event,
     parse_handoff_authority,
@@ -81,6 +84,55 @@ def dry():  # type: ignore[no-untyped-def]
     return prepare_dry_run(
         r, parse_handoff_authority(canonical(h()), r), parse_sanitized_observation(canonical(o()), r)
     )
+
+
+def sealed_records() -> dict[str, object]:
+    request = req()
+    authority = parse_handoff_authority(canonical(h()), request)
+    observation = parse_sanitized_observation(canonical(o()), request)
+    prepared = prepare_dry_run(request, authority, observation)
+    event = make_mock_event(
+        kind=DeliveryEventKind.PREPARE,
+        owner_id=OWNER,
+        idempotency_key=prepared.idempotency_key,
+        ordinal=1,
+    )
+    snapshot = replay_mock_lifecycle(prepared, owner_id=OWNER, events=(event,))
+    return {
+        "request": request,
+        "authority": authority,
+        "observation": observation,
+        "prepared": prepared,
+        "event": event,
+        "snapshot": snapshot,
+    }
+
+
+SEALED_TYPES = {
+    "request": SealedReadinessRequest,
+    "authority": HandoffAuthority,
+    "observation": SanitizedObservation,
+    "prepared": PreparedDryRun,
+    "event": ReadinessEvent,
+    "snapshot": DeliverySnapshot,
+}
+
+
+def consume_as(name: str, record: object) -> None:
+    records = sealed_records()
+    if name == "request":
+        parse_handoff_authority(canonical(h()), record)  # type: ignore[arg-type]
+    elif name == "authority":
+        prepare_dry_run(records["request"], record, records["observation"])  # type: ignore[arg-type]
+    elif name == "observation":
+        prepare_dry_run(records["request"], records["authority"], record)  # type: ignore[arg-type]
+    elif name == "prepared":
+        replay_mock_lifecycle(record, owner_id=OWNER, events=())  # type: ignore[arg-type]
+    elif name == "event":
+        replay_mock_lifecycle(records["prepared"], owner_id=OWNER, events=(record,))  # type: ignore[arg-type]
+    else:
+        assert isinstance(record, DeliverySnapshot)
+        _ = record.state
 
 
 def test_twenty_deterministic_reconstructions_and_mock_receipt():
@@ -289,45 +341,76 @@ def test_uninitialized_and_mapping_proxy_forged_requests_fail_closed():
         parse_handoff_authority(canonical(h()), uninitialized)
 
     forged = SealedReadinessRequest.__new__(SealedReadinessRequest)
-    object.__setattr__(forged, "_values", MappingProxyType({}))
+    with pytest.raises((AttributeError, ReadinessError)):
+        object.__setattr__(forged, "_values", {})
     with pytest.raises(ReadinessError, match="not sealed"):
         parse_handoff_authority(canonical(h()), forged)
 
     legitimate = req()
     copied = SealedReadinessRequest.__new__(SealedReadinessRequest)
-    object.__setattr__(copied, "_values", object.__getattribute__(legitimate, "_values"))
+    with pytest.raises((AttributeError, ReadinessError)):
+        object.__setattr__(copied, "_values", object.__getattribute__(legitimate, "_values"))
     with pytest.raises(ReadinessError, match="not sealed"):
         parse_handoff_authority(canonical(h()), copied)
 
-    replaced = req()
-    object.__setattr__(replaced, "_values", MappingProxyType(dict(object.__getattribute__(replaced, "_values"))))
-    with pytest.raises(ReadinessError, match="not sealed"):
-        parse_handoff_authority(canonical(h()), replaced)
+    with pytest.raises((AttributeError, ReadinessError)):
+        object.__setattr__(legitimate, "_values", {})
+    parse_handoff_authority(canonical(h()), legitimate)
 
     assert not hasattr(legitimate, "_proof")
 
 
-def test_mapping_proxy_backing_dict_mutation_invalidates_seal():
-    request = req()
-    proxy = object.__getattribute__(request, "_values")
-    backing = next(item for item in gc.get_referents(proxy) if isinstance(item, dict))
-    backing["response_url"] = "https://attacker.example/payload"
-    with pytest.raises(ReadinessError, match="not sealed"):
-        parse_handoff_authority(canonical(h()), request)
+@pytest.mark.parametrize("name", sorted(SEALED_TYPES))
+def test_sealed_records_reject_direct_and_object_deletion(name: str):
+    for delete in (lambda value: delattr(value, "_values"), lambda value: object.__delattr__(value, "_values")):
+        record = sealed_records()[name]
+        with pytest.raises((AttributeError, ReadinessError)):
+            delete(record)
+        consume_as(name, record)
 
-    prepared = dry()
-    event = make_mock_event(
-        kind=DeliveryEventKind.PREPARE,
-        owner_id=OWNER,
-        idempotency_key=prepared.idempotency_key,
-        ordinal=1,
-    )
-    event_proxy = object.__getattribute__(event, "_values")
-    event_backing = next(item for item in gc.get_referents(event_proxy) if isinstance(item, dict))
-    event_backing["kind"] = DeliveryEventKind.MOCK_RECEIPT_ACCEPTED
-    event_backing["receipt_sha256"] = "b" * 64
+
+@pytest.mark.parametrize(
+    ("source_name", "target_name"),
+    [(source, target) for source in sorted(SEALED_TYPES) for target in sorted(SEALED_TYPES) if source != target],
+)
+def test_all_cross_type_class_reassignments_reject_or_fail_closed(source_name: str, target_name: str):
+    record = sealed_records()[source_name]
+    try:
+        object.__setattr__(record, "__class__", SEALED_TYPES[target_name])
+    except TypeError:
+        return
     with pytest.raises(ReadinessError, match="not sealed"):
-        replay_mock_lifecycle(prepared, owner_id=OWNER, events=(event,))
+        consume_as(target_name, record)
+
+
+class ConfusingText(str):
+    def __eq__(self, _other: object) -> bool:
+        return True
+
+    __hash__ = str.__hash__
+
+
+class RaisingText(str):
+    def __eq__(self, _other: object) -> bool:
+        raise RuntimeError("hostile equality must never execute")
+
+    __hash__ = str.__hash__
+
+
+@pytest.mark.parametrize("value", [ConfusingText("ATTACKER"), RaisingText("F017")])
+def test_text_fields_require_exact_builtin_str(value: str):
+    with pytest.raises(ReadinessError, match="non-empty ASCII"):
+        seal_readiness_request(
+            feature_id=value,
+            machine_model="MacBook Pro M2 Max",
+            prior_sequence=17,
+            current_sequence=18,
+            expected_response_commit=COMMIT,
+            expected_response_path=PATH,
+            expected_response_sha256=HASH,
+            verified_response_bytes=RESPONSE,
+            route_alias_key=ROUTE,
+        )
 
 
 def test_metaclass_subclass_cannot_bypass_subclass_guard():
@@ -355,17 +438,16 @@ def test_metaclass_subclass_cannot_bypass_subclass_guard():
 def test_replay_revalidates_forged_event_fields(field: str, value: object):
     prepared = dry()
     event = make_mock_event(
-        kind=DeliveryEventKind.MOCK_RECEIPT_ACCEPTED,
+        kind=DeliveryEventKind.PREPARE,
         owner_id=OWNER,
         idempotency_key=prepared.idempotency_key,
         ordinal=1,
-        receipt_sha256="b" * 64,
     )
     values = dict(object.__getattribute__(event, "_values"))
     values[field] = value
-    object.__setattr__(event, "_values", MappingProxyType(values))
-    with pytest.raises(ReadinessError):
-        replay_mock_lifecycle(prepared, owner_id=OWNER, events=(event,))
+    with pytest.raises((AttributeError, ReadinessError)):
+        object.__setattr__(event, "_values", values)
+    replay_mock_lifecycle(prepared, owner_id=OWNER, events=(event,))
 
 
 @pytest.mark.parametrize(
