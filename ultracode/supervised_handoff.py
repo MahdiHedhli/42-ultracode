@@ -33,6 +33,7 @@ _SHA = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SYMBOL = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
 _NONCE = re.compile(r"[0-9a-f]{32}")
+_SEALED_SUBCLASSING_OPEN = True
 _PATH = re.compile(
     r"Prompts/F017/MacBook-Pro-M2-Max/(?P<s>[0-9]{3})__F017__MacBook-Pro-M2-Max__[A-Za-z0-9-]+__response[.]md"
 )
@@ -101,7 +102,7 @@ class _Sealed:
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        if cls.__module__ != __name__:
+        if not _SEALED_SUBCLASSING_OPEN:
             raise ReadinessError("sealed readiness objects cannot be subclassed")
 
     def _get(self, key: str) -> object:
@@ -176,6 +177,9 @@ class DeliverySnapshot(_Sealed):
     @property
     def event_log_sha256(self) -> str:
         return cast(str, self._get("event_log_sha256"))
+
+
+_SEALED_SUBCLASSING_OPEN = False
 
 
 def _canonical(value: object) -> bytes:
@@ -343,9 +347,17 @@ def prepare_dry_run(
         _value(handoff, "response_path"),
         _value(handoff, "response_sha256"),
         _value(handoff, "sequence"),
+        _value(observation, "response_commit"),
+        _value(observation, "response_path"),
+        _value(observation, "response_sha256"),
+        _value(observation, "prior_sequence"),
         _value(observation, "route_alias_key"),
     )
     if identities != (
+        request.response_commit,
+        request.response_path,
+        request.response_sha256,
+        request.prior_sequence,
         request.response_commit,
         request.response_path,
         request.response_sha256,
@@ -384,9 +396,10 @@ def make_mock_event(
         or ordinal < 1
     ):
         raise ReadinessError("mock event identity is invalid")
-    if (kind is DeliveryEventKind.MOCK_RECEIPT_ACCEPTED) != (
-        receipt_sha256 is not None and bool(_SHA.fullmatch(receipt_sha256 or ""))
-    ):
+    if kind is DeliveryEventKind.MOCK_RECEIPT_ACCEPTED:
+        if not isinstance(receipt_sha256, str) or not _SHA.fullmatch(receipt_sha256):
+            raise ReadinessError("mock receipt identity is invalid")
+    elif receipt_sha256 is not None:
         raise ReadinessError("mock receipt identity is invalid")
     return ReadinessEvent(
         {

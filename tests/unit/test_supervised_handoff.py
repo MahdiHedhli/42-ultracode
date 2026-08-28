@@ -178,6 +178,38 @@ def test_observation_field_mutations_fail(field: str):
         parse_sanitized_observation(canonical(a), req())
 
 
+def test_prepare_rejects_observation_bound_to_another_request():
+    first = req()
+    second = seal_readiness_request(
+        feature_id="F017",
+        machine_model="MacBook Pro M2 Max",
+        prior_sequence=17,
+        current_sequence=18,
+        expected_response_commit="b" * 40,
+        expected_response_path=PATH,
+        expected_response_sha256=HASH,
+        verified_response_bytes=RESPONSE,
+        route_alias_key=ROUTE,
+    )
+    second_handoff = h() | {"response_url": URL.replace(COMMIT, "b" * 40)}
+    observation = parse_sanitized_observation(canonical(o()), first)
+    authority = parse_handoff_authority(canonical(second_handoff), second)
+    with pytest.raises(ReadinessError, match="disagree"):
+        prepare_dry_run(second, authority, observation)
+
+
+@pytest.mark.parametrize("receipt", ["ATTACKER_CONTROLLED", 12345])
+def test_nonreceipt_events_reject_any_receipt_value(receipt: object):
+    with pytest.raises(ReadinessError, match="receipt identity"):
+        make_mock_event(
+            kind=DeliveryEventKind.PREPARE,
+            owner_id=OWNER,
+            idempotency_key=dry().idempotency_key,
+            ordinal=1,
+            receipt_sha256=receipt,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.parametrize(
     "field",
     ["html", "dom", "page_text", "conversation", "url", "cookie", "token", "clipboard", "accessibility", "screenshot"],
@@ -200,6 +232,8 @@ def test_sealing_retry_restart_terminal_and_zero_spies():
             pickle.dumps(value)
         with pytest.raises(ReadinessError):
             type("Widened", (type(value),), {})
+        with pytest.raises(ReadinessError):
+            type("Widened", (type(value),), {"__module__": "ultracode.supervised_handoff"})
     with pytest.raises(ReadinessError):
         SealedReadinessRequest({}, _token=object())
 
