@@ -50,12 +50,14 @@ must not create a capability for a real target.
 
 ## Durability and retries
 
-The journal is append-only canonical JSONL with a SHA-256 hash chain and an fsync
+The journal is append-only canonical JSONL with a SHA-256 hash chain, parent
+directory synchronization on creation, and full-storage synchronization on Darwin
 after every record. `ATTEMPT_STARTED` is durable before the `turn/start` line is
 written. Once that write is attempted, any missing or ambiguous receipt becomes
 terminal `UNCERTAIN`; automatic retry is prohibited. A partial line, invalid hash
 chain, unknown event, identity mismatch, or recovered in-flight attempt fails
-closed. A completed delivery and an uncertain delivery are both terminal.
+closed. A completed delivery and an uncertain delivery are both terminal. A
+verified pre-write failure may be retried only after a fresh human confirmation.
 
 ## Frozen claims and counters
 
@@ -65,4 +67,3 @@ other method, and zero real app-server launches, real alias resolutions, real ta
 reads/resumes, real turns, browser operations, MCP operations, automatic loops,
 and posts. Twenty clean reconstructions must be byte-identical. Mutation and crash
 campaigns must have zero unexpected passes.
-

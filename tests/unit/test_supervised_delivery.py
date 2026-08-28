@@ -79,6 +79,7 @@ def test_twenty_deterministic_fake_peer_reconstructions(tmp_path: Path) -> None:
         assert result["request_methods"] == ["initialize", "thread/read", "thread/resume", "turn/start"]
         assert result["client_notifications"] == ["initialized"]
         assert set(result["real_operation_counters"].values()) == {0}  # type: ignore[union-attr]
+        assert result["static_exclusions"] == ["automatic_loops", "browser_operations", "mcp_operations"]
         results.append((result["transcript_sha256"], result["journal_sha256"]))
     assert len(set(results)) == 1
 
@@ -135,6 +136,27 @@ def test_confirmation_rejects_non_tty_before_route_resolution(tmp_path: Path) ->
     assert not (tmp_path / "routes.json").exists()
 
 
+def test_foreground_entry_rejects_non_tty_before_process_launch(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    message = tmp_path / "message.txt"
+    message.write_bytes(b"payload")
+    message.chmod(0o600)
+    route = _route(tmp_path)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("process launch reached")
+
+    monkeypatch.setattr(delivery.subprocess, "Popen", forbidden)
+    with pytest.raises(DeliveryError, match="interactive TTY"):
+        delivery.deliver_foreground(
+            message_path=message,
+            target_alias="SYNTHETIC_TARGET",
+            route_registry=route,
+            journal_path=tmp_path / "journal.jsonl",
+            input_stream=io.StringIO(),
+            output_stream=io.StringIO(),
+        )
+
+
 def test_preview_escapes_terminal_control_sequences() -> None:
     rendered = DeliveryPreview("SYNTHETIC_TARGET", b"safe\x1b[2J\r\n").render()
     assert "\x1b" not in rendered
@@ -174,6 +196,61 @@ def test_crash_after_attempt_start_recovers_as_terminal_uncertain(tmp_path: Path
             is DeliveryOutcome.UNCERTAIN
         )
 
+    writer = io.BytesIO()
+    with pytest.raises(DeliveryError, match="terminal: UNCERTAIN"):
+        delivery._perform(
+            preview=preview,
+            capability=_confirmed(preview),
+            route_registry=_route(tmp_path),
+            journal_path=journal_path,
+            streams=(io.BytesIO(delivery._fake_transcript()), writer),
+        )
+    assert writer.getvalue() == b""
+
+
+def test_pre_write_failure_allows_only_fresh_confirmed_retry(tmp_path: Path) -> None:
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"synthetic supervised delivery")
+    route = _route(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    outcome, _session = delivery._perform(
+        preview=preview,
+        capability=_confirmed(preview),
+        route_registry=route,
+        journal_path=journal,
+        streams=(io.BytesIO(b'{"id":99,"jsonrpc":"2.0","result":{}}\n'), io.BytesIO()),
+    )
+    assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+    outcome, _session = delivery._perform(
+        preview=preview,
+        capability=_confirmed(preview),
+        route_registry=route,
+        journal_path=journal,
+        streams=(io.BytesIO(delivery._fake_transcript()), io.BytesIO()),
+    )
+    assert outcome is DeliveryOutcome.DELIVERED
+
+
+def test_attempt_start_is_durable_before_turn_start_write(tmp_path: Path) -> None:
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"synthetic supervised delivery")
+    journal_path = tmp_path / "journal.jsonl"
+
+    class InspectingWriter(io.BytesIO):
+        def write(self, value: bytes) -> int:
+            message = json.loads(value)
+            if message.get("method") == "turn/start":
+                records = [json.loads(line) for line in journal_path.read_bytes().splitlines()]
+                assert [record["event"] for record in records] == ["ATTEMPT_STARTED"]
+            return super().write(value)
+
+    outcome, _session = delivery._perform(
+        preview=preview,
+        capability=_confirmed(preview),
+        route_registry=_route(tmp_path),
+        journal_path=journal_path,
+        streams=(io.BytesIO(delivery._fake_transcript()), InspectingWriter()),
+    )
+    assert outcome is DeliveryOutcome.DELIVERED
+
 
 def test_partial_or_corrupt_journal_fails_closed(tmp_path: Path) -> None:
     partial = tmp_path / "partial.jsonl"
@@ -187,6 +264,18 @@ def test_partial_or_corrupt_journal_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(DeliveryError), delivery._Journal(corrupt):
         pass
 
+    valid_root = tmp_path / "valid"
+    valid_root.mkdir()
+    _run(valid_root)
+    valid = valid_root / "journal.jsonl"
+    records = [json.loads(line) for line in valid.read_bytes().splitlines()]
+    records[0]["record_sha256"] = "0" * 64
+    invalid_hash = tmp_path / "invalid-hash.jsonl"
+    invalid_hash.write_bytes(b"".join(delivery._canonical(record) + b"\n" for record in records))
+    invalid_hash.chmod(0o600)
+    with pytest.raises(DeliveryError, match="hash chain"), delivery._Journal(invalid_hash):
+        pass
+
 
 def test_alias_registry_rejects_symlink_and_unsafe_mode(tmp_path: Path) -> None:
     route = _route(tmp_path)
@@ -198,3 +287,14 @@ def test_alias_registry_rejects_symlink_and_unsafe_mode(tmp_path: Path) -> None:
     link.symlink_to(route)
     with pytest.raises(DeliveryError, match="cannot be opened safely"):
         delivery._resolve_alias(link, "SYNTHETIC_TARGET")
+
+
+def test_fake_qualification_never_follows_or_overwrites_route_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "qualification"
+    root.mkdir(mode=0o700)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("preserve", encoding="ascii")
+    (root / "routes.json").symlink_to(victim)
+    with pytest.raises(DeliveryError, match="new owned file"):
+        delivery._qualify_fake_peer(root)
+    assert victim.read_text(encoding="ascii") == "preserve"

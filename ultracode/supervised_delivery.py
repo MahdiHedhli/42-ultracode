@@ -9,6 +9,7 @@ import os
 import secrets
 import stat
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -56,6 +57,26 @@ class ProtocolProfile:
     client_notifications: frozenset[str]
     server_notifications: frozenset[str]
     schema_sha256: Mapping[str, str]
+
+
+@dataclass(slots=True)
+class _OperationCounters:
+    real_app_server_launches: int = 0
+    real_alias_resolutions: int = 0
+    real_task_reads: int = 0
+    real_task_resumes: int = 0
+    real_turns: int = 0
+    real_posts: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "app_server_launches": self.real_app_server_launches,
+            "posts": self.real_posts,
+            "real_alias_resolutions": self.real_alias_resolutions,
+            "real_task_reads": self.real_task_reads,
+            "real_task_resumes": self.real_task_resumes,
+            "real_turns": self.real_turns,
+        }
 
 
 PROTOCOL_PROFILE = ProtocolProfile(
@@ -122,6 +143,54 @@ def _strict_object(raw: bytes, *, label: str, max_bytes: int = _MAX_LINE_BYTES) 
     if duplicate or type(parsed) is not dict:
         raise DeliveryError(f"{label} must be one duplicate-free object")
     return cast(dict[str, object], parsed)
+
+
+def _direct_path(path: Path, label: str) -> Path:
+    if not isinstance(path, Path):
+        raise DeliveryError(f"{label} path must use the native path type")
+    absolute = path.absolute()
+    try:
+        resolved_parent = absolute.parent.resolve(strict=True)
+    except OSError as exc:
+        raise DeliveryError(f"{label} parent is unavailable") from exc
+    if resolved_parent != absolute.parent:
+        raise DeliveryError(f"{label} parent must not traverse a symlink")
+    return absolute
+
+
+def _durable_sync(fd: int, *, full_storage: bool) -> None:
+    os.fsync(fd)
+    if full_storage and sys.platform == "darwin":
+        try:
+            fcntl.fcntl(fd, 51)  # F_FULLFSYNC from <sys/fcntl.h>.
+        except OSError as exc:
+            raise DeliveryError("full storage synchronization failed") from exc
+
+
+def _sync_parent(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path.parent, flags)
+    try:
+        _durable_sync(fd, full_storage=False)
+    finally:
+        os.close(fd)
+
+
+def _write_exclusive_owned(path: Path, data: bytes) -> None:
+    path = _direct_path(path, "fixture")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise DeliveryError("fixture destination must be a new owned file") from exc
+    try:
+        written = os.write(fd, data)
+        if written != len(data):
+            raise DeliveryError("fixture write was partial")
+        _durable_sync(fd, full_storage=True)
+    finally:
+        os.close(fd)
+    _sync_parent(path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +317,7 @@ def confirm_preview(
 
 
 def _read_owned_regular(path: Path, *, max_bytes: int) -> bytes:
+    path = _direct_path(path, "input")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
@@ -255,7 +325,7 @@ def _read_owned_regular(path: Path, *, max_bytes: int) -> bytes:
         raise DeliveryError("route registry cannot be opened safely") from exc
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise DeliveryError("route registry ownership or mode is unsafe")
         if info.st_size <= 0 or info.st_size > max_bytes:
             raise DeliveryError("route registry is outside the size contract")
@@ -303,13 +373,23 @@ class _Journal:
         self._records: list[dict[str, object]] = []
 
     def __enter__(self) -> _Journal:
-        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        self._fd = os.open(self._path, flags, 0o600)
+        self._path = _direct_path(self._path, "journal")
+        common = os.O_RDWR | os.O_APPEND | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        created = False
+        try:
+            self._fd = os.open(self._path, common | os.O_CREAT | os.O_EXCL, 0o600)
+            created = True
+        except FileExistsError:
+            self._fd = os.open(self._path, common)
         try:
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             info = os.fstat(self._fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
                 raise DeliveryError("journal ownership or mode is unsafe")
+            if not created and info.st_size == 0:
+                raise DeliveryError("an unexplained empty journal cannot be adopted")
+            if created:
+                _sync_parent(self._path)
             os.lseek(self._fd, 0, os.SEEK_SET)
             raw = b""
             while True:
@@ -405,14 +485,23 @@ class _Journal:
         written = os.write(self._fd, line)
         if written != len(line):
             raise DeliveryError("journal append was partial")
-        os.fsync(self._fd)
+        _durable_sync(self._fd, full_storage=True)
         self._records.append(record)
 
 
 class _JsonlSession:
-    def __init__(self, reader: BinaryIO, writer: BinaryIO) -> None:
+    def __init__(
+        self,
+        reader: BinaryIO,
+        writer: BinaryIO,
+        *,
+        real_operations: bool = False,
+        counters: _OperationCounters | None = None,
+    ) -> None:
         self._reader = reader
         self._writer = writer
+        self._real_operations = real_operations
+        self._counters = counters or _OperationCounters()
         self._next_id = 1
         self._turn_start_count = 0
         self.methods: list[str] = []
@@ -441,6 +530,14 @@ class _JsonlSession:
         request_id = self._next_id
         self._next_id += 1
         self.methods.append(method)
+        if self._real_operations:
+            if method == "thread/read":
+                self._counters.real_task_reads += 1
+            elif method == "thread/resume":
+                self._counters.real_task_resumes += 1
+            elif method == "turn/start":
+                self._counters.real_turns += 1
+                self._counters.real_posts += 1
         self._write({"id": request_id, "jsonrpc": "2.0", "method": method, "params": dict(params)})
         response = self._read()
         if "method" in response:
@@ -473,6 +570,9 @@ class _JsonlSession:
         )
         if not {"codexHome", "platformFamily", "platformOs", "userAgent"}.issubset(initialized):
             raise DeliveryError("initialize response is incomplete")
+        user_agent = initialized["userAgent"]
+        if type(user_agent) is not str or "0.146.0" not in user_agent:
+            raise DeliveryError("app-server version does not match the frozen protocol profile")
         self._notify("initialized", {})
         read = self._request("thread/read", {"includeTurns": False, "threadId": thread_id})
         self._thread_identity(read, thread_id)
@@ -560,22 +660,30 @@ def _perform(
     journal_path: Path,
     streams: tuple[BinaryIO, BinaryIO] | None = None,
     attempt_id: str | None = None,
+    counters: _OperationCounters | None = None,
 ) -> tuple[DeliveryOutcome, _JsonlSession | None]:
     consume = _consume_capability
     if not callable(consume):
         raise DeliveryError("confirmation boundary is unavailable")
     consume(capability, preview)
+    real_operations = streams is None
+    operation_counters = counters or _OperationCounters()
     thread_id = _resolve_alias(route_registry, preview.target_alias)
+    if real_operations:
+        operation_counters.real_alias_resolutions += 1
     attempt = attempt_id or secrets.token_hex(16)
     with _Journal(journal_path) as journal:
         prior = journal.terminal_for(payload_sha256=preview.payload_sha256, target_alias=preview.target_alias)
-        if prior is not None:
-            if prior in {DeliveryOutcome.DELIVERED, DeliveryOutcome.UNCERTAIN}:
-                raise DeliveryError(f"delivery is terminal: {prior.value}")
-            raise DeliveryError("a new human confirmation is required after a pre-write failure")
+        if prior in {DeliveryOutcome.DELIVERED, DeliveryOutcome.UNCERTAIN}:
+            raise DeliveryError(f"delivery is terminal: {prior.value}")
 
         def run(reader: BinaryIO, writer: BinaryIO) -> tuple[DeliveryOutcome, _JsonlSession]:
-            session = _JsonlSession(reader, writer)
+            session = _JsonlSession(
+                reader,
+                writer,
+                real_operations=real_operations,
+                counters=operation_counters,
+            )
             try:
                 session.prepare(thread_id)
             except (BrokenPipeError, DeliveryError, OSError):
@@ -592,6 +700,7 @@ def _perform(
 
         if streams is not None:
             return run(*streams)
+        operation_counters.real_app_server_launches += 1
         with _CodexProcess() as process_streams:
             return run(*process_streams)
 
@@ -630,7 +739,7 @@ def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
                 "codexHome": "/synthetic/codex-home",
                 "platformFamily": "unix",
                 "platformOs": "macos",
-                "userAgent": "synthetic-peer/1",
+                "userAgent": "codex-cli 0.146.0 synthetic-peer/1",
             },
         },
         {"id": 2, "jsonrpc": "2.0", "result": {"thread": {"id": thread_id}}},
@@ -649,9 +758,11 @@ def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
 def _qualify_fake_peer(root: Path) -> dict[str, object]:
     """Private deterministic no-live-transport qualification harness."""
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root_info = root.lstat()
+    if not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != os.getuid() or root_info.st_mode & 0o077:
+        raise DeliveryError("synthetic qualification root is unsafe")
     route = root / "routes.json"
-    route.write_bytes(_canonical({"aliases": {"SYNTHETIC_TARGET": "synthetic-thread"}, "version": 1}))
-    route.chmod(0o600)
+    _write_exclusive_owned(route, _canonical({"aliases": {"SYNTHETIC_TARGET": "synthetic-thread"}, "version": 1}))
     preview = DeliveryPreview(target_alias="SYNTHETIC_TARGET", message=b"synthetic supervised delivery")
 
     class SyntheticInput:
@@ -689,6 +800,7 @@ def _qualify_fake_peer(root: Path) -> dict[str, object]:
     )
     reader = io.BytesIO(_fake_transcript())
     writer = io.BytesIO()
+    counters = _OperationCounters()
     outcome, session = _perform(
         preview=preview,
         capability=capability,
@@ -696,6 +808,7 @@ def _qualify_fake_peer(root: Path) -> dict[str, object]:
         journal_path=root / "journal.jsonl",
         streams=(reader, writer),
         attempt_id="0" * 32,
+        counters=counters,
     )
     assert session is not None
     return {
@@ -704,15 +817,6 @@ def _qualify_fake_peer(root: Path) -> dict[str, object]:
         "client_notifications": session.notifications,
         "transcript_sha256": _sha(writer.getvalue()),
         "journal_sha256": _sha((root / "journal.jsonl").read_bytes()),
-        "real_operation_counters": {
-            "app_server_launches": 0,
-            "automatic_loops": 0,
-            "browser_operations": 0,
-            "mcp_operations": 0,
-            "posts": 0,
-            "real_alias_resolutions": 0,
-            "real_task_reads": 0,
-            "real_task_resumes": 0,
-            "real_turns": 0,
-        },
+        "real_operation_counters": counters.to_dict(),
+        "static_exclusions": ["automatic_loops", "browser_operations", "mcp_operations"],
     }
