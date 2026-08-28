@@ -360,6 +360,16 @@ transport. Live state treats D6 as synthetic Repack and D7 as readiness-only;
 historical stage text is not live authority and final ontology reconciliation
 remains pending planner review.
 
+Sequence 22 executes under the same accepted D4 envelope and registers only the
+closed D8 supervised-delivery policy. The policy remains supervised-only:
+human confirmation, one message, one target, and no background loop. Registry
+validation must cover all eight exact digests, the full 64 ordered policy
+matrix with 56 cross-policy rejections, all eleven D8 authorization fields,
+noncanonical envelope encodings, immutable singleton resolution, and universal
+checkpoint, inference, and automatic-posting prohibition. Sequence 22 creates
+no browser, chat, task, alias-resolution, posting, receipt, or live-delivery
+capability and does not execute D8.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

@@ -27,6 +27,13 @@ it does not execute D7, resolve a chat-thread alias, connect to a browser, or
 post anything. The live ontology accepts D6 as synthetic Repack and reserves
 D7 for readiness only pending final planner reconciliation.
 
+Sequence 22 runs under D4 and registers only the exact D8 supervised-delivery
+policy. Its dogfood remains the inert local controller/restart harness. The
+registered policy is limited to future, separately authorized supervised
+delivery with human confirmation, one message, one target, and no background
+loop. This sequence does not resolve a task alias, access a browser or chat,
+deliver a message, create a receipt, instantiate a transport, or execute D8.
+
 ## Current automation boundary
 
 This procedure is designed for **Level C**. A person explicitly invokes the

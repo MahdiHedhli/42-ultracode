@@ -417,6 +417,7 @@ class ReviewedPromptPolicy(StrEnum):
         "f017-m2-d6r1-bounded-checkpoint-free-repack-path-safety-repair-v1"
     )
     F017_M2_D7_SUPERVISED_CHAT_HANDOFF_READINESS = "f017-m2-d7-supervised-chat-handoff-readiness-v1"
+    F017_M2_D8_SUPERVISED_CHAT_DELIVERY_TRANSPORT = "f017-m2-d8-supervised-chat-delivery-transport-v1"
 
 
 _AUTHORIZATION_FIELDS = (
@@ -496,6 +497,14 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
                 "source_mutation": "BOUNDED_42_ONLY_SUPERVISED_CHAT_HANDOFF_READINESS",
             }
         ),
+        ReviewedPromptPolicy.F017_M2_D8_SUPERVISED_CHAT_DELIVERY_TRANSPORT: MappingProxyType(
+            {
+                "phase": "Feature-Loop-D8-supervised-chat-delivery-transport",
+                "human_gate": "PLANNER_ACCEPTED_D7_SUPERVISED_CHAT_HANDOFF_READINESS",
+                "source_repository": "MahdiHedhli/42-ultracode",
+                "source_mutation": "BOUNDED_42_ONLY_SUPERVISED_CHAT_DELIVERY_TRANSPORT",
+            }
+        ),
     }
 )
 
@@ -561,6 +570,17 @@ class _PromptAuthorizationPolicy:
         for field_name, expected in self._values.items():
             if getattr(envelope, field_name) != expected:
                 raise FrontierError(f"prompt authorization mismatch: {field_name}")
+
+    def require_canonical_authorization_encoding(self, prompt_text: str) -> None:
+        """Reject alternate D8 scalar encodings before a lease can be acquired."""
+
+        if self.policy_id is not ReviewedPromptPolicy.F017_M2_D8_SUPERVISED_CHAT_DELIVERY_TRANSPORT:
+            return
+        front = prompt_text[4:].split("\n---\n", 1)[0]
+        lines = front.splitlines()
+        for field_name, expected in self._values.items():
+            if lines.count(f"{field_name}: {expected}") != 1:
+                raise FrontierError(f"prompt authorization encoding mismatch: {field_name}")
 
 
 def _mint_reviewed_policy(
@@ -666,6 +686,20 @@ _REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = 
             human_gate="PLANNER_ACCEPTED_D6_CHECKPOINT_FREE_SYNTHETIC_REPACK",
             source_repository="MahdiHedhli/42-ultracode",
             source_mutation="BOUNDED_42_ONLY_SUPERVISED_CHAT_HANDOFF_READINESS",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        ),
+        ReviewedPromptPolicy.F017_M2_D8_SUPERVISED_CHAT_DELIVERY_TRANSPORT: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D8_SUPERVISED_CHAT_DELIVERY_TRANSPORT,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D8-supervised-chat-delivery-transport",
+            human_gate="PLANNER_ACCEPTED_D7_SUPERVISED_CHAT_HANDOFF_READINESS",
+            source_repository="MahdiHedhli/42-ultracode",
+            source_mutation="BOUNDED_42_ONLY_SUPERVISED_CHAT_DELIVERY_TRANSPORT",
             original_checkpoint_access="PROHIBITED",
             full_model_inference="PROHIBITED",
             automatic_chat_posting="PROHIBITED",
@@ -901,7 +935,8 @@ class GitPromptTransport:
             raise FrontierError("prompt sidecar must be adjacent to the prompt")
         prompt = self.verify_sha256(prompt_commit, safe_prompt, expected_sha256)
         try:
-            envelope = PromptEnvelope.from_markdown(prompt.decode("utf-8", errors="strict"))
+            prompt_text = prompt.decode("utf-8", errors="strict")
+            envelope = PromptEnvelope.from_markdown(prompt_text)
             sidecar = self.read(prompt_commit, safe_sidecar).decode("utf-8", errors="strict")
         except UnicodeError as exc:
             raise FrontierError("prompt or sidecar is not UTF-8") from exc
@@ -912,6 +947,7 @@ class GitPromptTransport:
         if len(fields) != 2 or fields[0] != expected_sha256 or fields[1] != Path(safe_prompt).name:
             raise FrontierError("prompt sidecar identity mismatch")
         policy.require(envelope)
+        policy.require_canonical_authorization_encoding(prompt_text)
         self.require_ancestor(envelope.prompt_control_base_commit, prompt_commit)
         return VerifiedPromptIdentity(
             safe_prompt,
