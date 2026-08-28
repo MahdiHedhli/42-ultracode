@@ -1,0 +1,81 @@
+{
+  "schema": "ultracode.f017.policy-registration-evidence.v1",
+  "sequence": 22,
+  "host": {
+    "machine": "MacBook Pro M2 Max",
+    "architecture": "arm64"
+  },
+  "starting_authority": {
+    "commit": "71953adaf931c535b0d05d0d8d0da364d16207af",
+    "tree": "a12b84945625ab0cf1ac403c45d00ab0f8f43ed4"
+  },
+  "implementation": {
+    "commit": "153774ac7a211038a00016a576a5bd1e155d0e55",
+    "tree": "d7058b787a836e9dd0c3b2f30bef422017850df5",
+    "base_to_implementation_diff_sha256": "ff9d8055891c70b5e87ad754cb2752a2f929438236823ded2756f4c0dee2056e"
+  },
+  "execution_policy": {
+    "policy_id": "f017-m2-d4-checkpoint-free-repack-investigation-v1",
+    "canonical_digest": "89bb8b74fadda6562eb791cf1f932de9307896e578d3f32c59688457277f59af"
+  },
+  "registered_policy": {
+    "policy_id": "f017-m2-d8-supervised-chat-delivery-transport-v1",
+    "canonical_digest": "db58a1e73a934719f4df7b9e07a4217a289cb8f4b3b748ce16a0e537df8036b6",
+    "phase": "Feature-Loop-D8-supervised-chat-delivery-transport",
+    "human_gate": "PLANNER_ACCEPTED_D7_SUPERVISED_CHAT_HANDOFF_READINESS",
+    "source_repository": "MahdiHedhli/42-ultracode",
+    "source_mutation": "BOUNDED_42_ONLY_SUPERVISED_CHAT_DELIVERY_TRANSPORT",
+    "automatic_chat_posting": "PROHIBITED",
+    "limitation": "SUPERVISED_ONLY_HUMAN_CONFIRMATION_REQUIRED_ONE_MESSAGE_ONE_TARGET_NO_BACKGROUND_LOOP"
+  },
+  "qualification": {
+    "baseline_tests_passed": 430,
+    "focused_feature_loop_tests_passed": 157,
+    "final_tests_passed": 450,
+    "ordered_policy_checks": 64,
+    "cross_policy_rejections": 56,
+    "d8_field_mutations_rejected": 11,
+    "d8_noncanonical_envelopes_rejected": 8,
+    "ruff_format": "PASS",
+    "ruff_lint": "PASS",
+    "mypy": "PASS",
+    "pytest": "PASS",
+    "privacy_scan": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "dogfood": {
+    "iterations": 2,
+    "events": 11,
+    "restart_reconstructed": true,
+    "final_state": "COMPLETE",
+    "manual_prompt_copy_count": 0,
+    "raw_local_evidence_sha256": "4330ce903f5e0143be4edd136d38a1981936189ddb3e49efd15ab93be9566b7f"
+  },
+  "controller": {
+    "workers": 1,
+    "aliases_resolved": 0,
+    "browser_or_chat_transports": 0,
+    "lease_state": "ACTIVE_UNTIL_TERMINAL_RESULT",
+    "handoff": "PENDING_REVIEW"
+  },
+  "freeze_transitions": {
+    "declared": 6,
+    "honored": 6,
+    "undeclared": 0
+  },
+  "prohibited_activity": {
+    "pulsarmlx_or_r001_access": false,
+    "checkpoint_access": false,
+    "repack": false,
+    "inference": false,
+    "event_05_or_06_execution": false,
+    "p1": false,
+    "d8_execution": false,
+    "browser_or_chat_alias_resolution": false,
+    "browser_or_chat_transport": false,
+    "chat_posting": false,
+    "live_delivery_capability": false,
+    "active_feature_loop": false,
+    "mac_studio_runtime_or_source_access": false
+  }
+}
