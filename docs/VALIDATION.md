@@ -326,6 +326,14 @@ mutation and human gates, keep checkpoint/inference/chat capabilities universall
 prohibited, prove zero lease/history mutation for a matching widened prompt, and
 show that source and checkpoint aliases were never requested.
 
+Sequence 9 registers one D5R1 bounded duplicate-role repair policy without
+executing D5R1. Validation must preserve the PASS-only parent guard, admit only
+the exact planner-authored PASS recovery attestation through the normal guard,
+preserve D2/D4/D5 digests, derive the D5R1 digest through production
+canonicalization, reject all field and cross-policy substitutions before lease,
+prove durable policy binding across restart, and demonstrate that no source or
+checkpoint alias was requested.
+
 ## Evidence record
 
 For each release candidate or dogfood run, record the date, commit, environment

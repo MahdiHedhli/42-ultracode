@@ -157,3 +157,8 @@ The sanitized 2026-08-14 record is at
 It records a two-turn harness run and a two-turn read-only Codex CLI adapter
 run. Both reached `COMPLETE`; the adapter record explicitly retains the planner
 and worker launches that were still manual Level C actions.
+
+The sanitized Sequence 9 D5R1 policy-registration recovery record is at
+[docs/dogfood/2026-08-27-d5r1-policy-registration-recovery-evidence.json](dogfood/2026-08-27-d5r1-policy-registration-recovery-evidence.json).
+It records registry qualification only; D5R1, repack, checkpoint access, and
+inference were not executed.

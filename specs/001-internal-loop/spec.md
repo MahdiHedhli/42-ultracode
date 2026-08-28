@@ -4,13 +4,16 @@
 
 ## D2 Security Repair Addendum
 
-The closed registry includes reviewed D4 checkpoint-free read-only investigation
-and D5 bounded checkpoint-free Repack-branch write policies. D2 and D4 require
-source mutation to remain prohibited. Only the exact D5 policy ID may select its
-single bounded source-mutation value and planner-accepted human gate. Checkpoint
-access, inference, and automatic chat posting remain prohibited for every
-policy. Registration grants no execution authority until a separately verified
-prompt selects the policy at a future frontier.
+The closed registry includes reviewed D4 checkpoint-free read-only
+investigation, D5 bounded checkpoint-free Repack-branch write, and D5R1 bounded
+duplicate-role repair policies. D2 and D4 require source mutation to remain
+prohibited. Only the exact D5 and D5R1 policy IDs may select their distinct
+bounded source-mutation values and planner-accepted human gates. D5R1 permits
+only the minimal duplicate/missing/unknown component-role validation, existing
+in-file tests, state-label reconciliation, and one sanitized qualification
+record. Checkpoint access, inference, and automatic chat posting remain
+prohibited for every policy. Registration grants no execution authority until
+a separately verified prompt selects the policy at a future frontier.
 
 Prompt authorization MUST be anchored by a closed adapter-owned registry. A
 caller supplies only a reviewed policy identifier; it cannot construct or

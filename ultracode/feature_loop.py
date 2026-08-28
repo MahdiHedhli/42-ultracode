@@ -411,6 +411,7 @@ class ReviewedPromptPolicy(StrEnum):
     F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR = "f017-m2-d2-policy-trust-anchor-repair-v1"
     F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION = "f017-m2-d4-checkpoint-free-repack-investigation-v1"
     F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE = "f017-m2-d5-bounded-checkpoint-free-repack-write-v1"
+    F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR = "f017-m2-d5r1-bounded-checkpoint-free-repack-repair-v1"
 
 
 _AUTHORIZATION_FIELDS = (
@@ -436,20 +437,30 @@ _POLICY_BOUNDARIES: Mapping[ReviewedPromptPolicy, Mapping[str, str]] = MappingPr
     {
         ReviewedPromptPolicy.F017_M2_D2_POLICY_TRUST_ANCHOR_REPAIR: MappingProxyType(
             {
+                "phase": "Feature-Loop-D2-policy-trust-anchor-repair",
                 "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_REPAIR",
                 "source_mutation": "PROHIBITED",
             }
         ),
         ReviewedPromptPolicy.F017_M2_D4_CHECKPOINT_FREE_REPACK_INVESTIGATION: MappingProxyType(
             {
+                "phase": "Feature-Loop-D4-checkpoint-free-repack-investigation",
                 "human_gate": "NOT_REQUIRED_CHECKPOINT_FREE_READ_ONLY",
                 "source_mutation": "PROHIBITED",
             }
         ),
         ReviewedPromptPolicy.F017_M2_D5_BOUNDED_CHECKPOINT_FREE_REPACK_WRITE: MappingProxyType(
             {
+                "phase": "Feature-Loop-D5-bounded-checkpoint-free-repack-write",
                 "human_gate": "PLANNER_ACCEPTED_D4_CHECKPOINT_FREE_WRITE",
                 "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
+            }
+        ),
+        ReviewedPromptPolicy.F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR: MappingProxyType(
+            {
+                "phase": "Feature-Loop-D5R1-bounded-checkpoint-free-repack-repair",
+                "human_gate": "PLANNER_ACCEPTED_D5_SCOPE_EXPANSION_REPAIR",
+                "source_mutation": "BOUNDED_CHECKPOINT_FREE_REPACK_DUPLICATE_ROLE_REPAIR_BRANCH_ONLY",
             }
         ),
     }
@@ -485,6 +496,8 @@ class _PromptAuthorizationPolicy:
         boundary = _POLICY_BOUNDARIES.get(policy_id)
         if boundary is None or normalized["source_mutation"] != boundary["source_mutation"]:
             raise FrontierError("reviewed prompt policy has invalid policy-specific source mutation")
+        if normalized["phase"] != boundary["phase"]:
+            raise FrontierError("reviewed prompt policy has invalid policy-specific phase")
         if normalized["human_gate"] != boundary["human_gate"]:
             raise FrontierError("reviewed prompt policy contains an unsafe human gate")
         canonical = json.dumps(
@@ -562,6 +575,20 @@ _REVIEWED_POLICIES: Mapping[ReviewedPromptPolicy, _PromptAuthorizationPolicy] = 
             human_gate="PLANNER_ACCEPTED_D4_CHECKPOINT_FREE_WRITE",
             source_repository="MahdiHedhli/PulsarMLX",
             source_mutation="BOUNDED_CHECKPOINT_FREE_REPACK_BRANCH_ONLY",
+            original_checkpoint_access="PROHIBITED",
+            full_model_inference="PROHIBITED",
+            automatic_chat_posting="PROHIBITED",
+        ),
+        ReviewedPromptPolicy.F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR: _mint_reviewed_policy(
+            ReviewedPromptPolicy.F017_M2_D5R1_BOUNDED_CHECKPOINT_FREE_REPACK_REPAIR,
+            schema=PROMPT_SCHEMA,
+            feature_id="F017",
+            machine_model="MacBook Pro M2 Max",
+            machine_architecture="arm64",
+            phase="Feature-Loop-D5R1-bounded-checkpoint-free-repack-repair",
+            human_gate="PLANNER_ACCEPTED_D5_SCOPE_EXPANSION_REPAIR",
+            source_repository="MahdiHedhli/PulsarMLX",
+            source_mutation="BOUNDED_CHECKPOINT_FREE_REPACK_DUPLICATE_ROLE_REPAIR_BRANCH_ONLY",
             original_checkpoint_access="PROHIBITED",
             full_model_inference="PROHIBITED",
             automatic_chat_posting="PROHIBITED",

@@ -2,6 +2,10 @@
 
 ## D2 Security Repair Plan
 
+0. Register one exact D5R1 bounded duplicate-role repair policy while
+   preserving the production PASS-only parent guard and every D2/D4/D5 value
+   and digest.
+
 0. Register one exact D5 bounded checkpoint-free Repack-branch write policy
    while preserving D2/D4 values, digests, and universal checkpoint,
    inference, and chat-posting prohibitions.
