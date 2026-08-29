@@ -753,7 +753,7 @@ def _resolve_alias(path: Path, alias: str) -> _RouteAuthority:
         or any(char not in safe_thread_chars for char in thread_id)
     ):
         raise DeliveryError("target alias is missing or invalid")
-    if source_kind not in {"cli", "vscode", "exec", "appServer"}:
+    if type(source_kind) is not str or source_kind not in {"cli", "vscode", "exec", "appServer"}:
         raise DeliveryError("target source kind is not a stable simple source")
     if (
         type(cwd) is not str
@@ -837,7 +837,7 @@ class _Journal:
             record = _strict_object(line, label="journal record")
             if set(record) != fixed or record["ordinal"] != ordinal or record["previous_sha256"] != previous:
                 raise DeliveryError("journal sequence or schema is invalid")
-            if record["event"] not in cls._EVENTS:
+            if type(record["event"]) is not str or record["event"] not in cls._EVENTS:
                 raise DeliveryError("journal event is not allowed")
             claimed = record["record_sha256"]
             unsigned = dict(record)

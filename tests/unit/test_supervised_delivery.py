@@ -397,10 +397,11 @@ def test_route_cwd_must_be_normalized_absolute(tmp_path: Path, cwd: str) -> None
         delivery._resolve_alias(route, "SYNTHETIC_TARGET")
 
 
-def test_ambiguous_unknown_source_kind_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_kind", ["unknown", [], {}])
+def test_ambiguous_unknown_source_kind_is_rejected(tmp_path: Path, source_kind: object) -> None:
     route = _route(tmp_path)
     data = json.loads(route.read_text(encoding="ascii"))
-    data["aliases"]["SYNTHETIC_TARGET"]["source_kind"] = "unknown"
+    data["aliases"]["SYNTHETIC_TARGET"]["source_kind"] = source_kind
     route.write_text(json.dumps(data), encoding="ascii")
     with pytest.raises(DeliveryError, match="source kind"):
         delivery._resolve_alias(route, "SYNTHETIC_TARGET")
@@ -1346,6 +1347,14 @@ def test_partial_or_corrupt_journal_fails_closed(tmp_path: Path) -> None:
     _run(valid_root)
     valid = valid_root / "journal.jsonl"
     records = [json.loads(line) for line in valid.read_bytes().splitlines()]
+    invalid_event_records = [dict(record) for record in records]
+    invalid_event_records[0]["event"] = []
+    invalid_event = tmp_path / "invalid-event.jsonl"
+    invalid_event.write_bytes(b"".join(delivery._canonical(record) + b"\n" for record in invalid_event_records))
+    invalid_event.chmod(0o600)
+    with pytest.raises(DeliveryError, match="journal event"), delivery._Journal(invalid_event):
+        pass
+
     records[0]["record_sha256"] = "0" * 64
     invalid_hash = tmp_path / "invalid-hash.jsonl"
     invalid_hash.write_bytes(b"".join(delivery._canonical(record) + b"\n" for record in records))
