@@ -88,15 +88,39 @@ Repair:
 - reject missing, extra, renamed, widened, and wrong-identity error fields; and
 - reject unhashable turn status/items-view type drift categorically.
 
+## Review repair loop 6
+
+Grok found that unhashable `thread/status/changed` `type` and `activeFlags`
+values could escape as `TypeError`. After `ATTEMPT_STARTED`, that bypassed the
+in-process terminal `UNCERTAIN` mapping even though durable replay remained
+fail-closed.
+
+Repair:
+
+- require string status types before membership checks;
+- require string active-flag values before membership checks;
+- reject the malformed values categorically as `DeliveryError`; and
+- prove the same values become `UNCERTAIN` after `ATTEMPT_STARTED`.
+
+## Review repair loop 7
+
+Claude found two pre-write instances of the same unhashable-membership defect
+class in route `source_kind` and journal `event` validation.
+
+Repair:
+
+- require string route source kinds before membership checks;
+- require string journal events before membership checks; and
+- test list and object drift at both boundaries as categorical
+  `DeliveryError` failures.
+
 ## Qualification
 
 - Raw schemas: 14/14 exact.
-- Focused delivery/security tests: 97 passed before the final ordering
-  regression.
+- Focused delivery/security tests: 126 passed on the final repair tree.
 - Official format, lint, and strict typing gates: passed.
-- Complete review-repair exact-worktree tests: 568 passed.
-- Focused fake-peer, identity-probe, error-notification, and Darwin cleanup run:
-  30 passed.
+- Complete review-repair exact-worktree tests: 576 passed.
+- Deterministic fake-peer reconstructions: 20/20 in the dedicated test.
 - Owned Codex app-server descendants after no-live qualification: zero.
 - Sanitized candidate privacy scan: passed.
 - Unrelated-project access: none.
