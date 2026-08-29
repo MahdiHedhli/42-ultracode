@@ -1235,6 +1235,22 @@ def test_thread_status_unhashable_type_drift_is_categorical(status: object) -> N
         delivery._JsonlSession._status_value(status)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("status", [], "turn status violates the selected schema"),
+        ("status", {}, "turn status violates the selected schema"),
+        ("itemsView", [], "turn items view violates the selected schema"),
+        ("itemsView", {}, "turn items view violates the selected schema"),
+    ],
+)
+def test_turn_unhashable_membership_drift_is_categorical(field: str, value: object, message: str) -> None:
+    turn: dict[str, object] = {"id": "synthetic-turn", "items": [], "status": "completed"}
+    turn[field] = value
+    with pytest.raises(delivery.DeliveryError, match=message):
+        delivery._JsonlSession._turn(turn)
+
+
 def test_preview_escapes_terminal_control_sequences() -> None:
     rendered = DeliveryPreview("SYNTHETIC_TARGET", b"safe\x1b[2J\r\n").render()
     assert "\x1b" not in rendered

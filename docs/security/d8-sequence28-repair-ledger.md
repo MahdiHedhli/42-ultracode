@@ -122,12 +122,20 @@ object drift claimed by the ledger.
 Repair: exercise both list and object journal-event drift through the persisted
 journal parser and require the same categorical `DeliveryError` result.
 
+## Review repair loop 9
+
+Claude found that the loop 5 turn `status` and `itemsView` unhashable-drift
+guards had no direct falsifiers.
+
+Repair: exercise list and object drift for both fields through the selected
+turn projection and require categorical `DeliveryError` results.
+
 ## Qualification
 
 - Raw schemas: 14/14 exact.
-- Focused delivery/security tests: 126 passed on the final repair tree.
+- Focused delivery/security tests: 130 passed on the final repair tree.
 - Official format, lint, and strict typing gates: passed.
-- Complete review-repair exact-worktree tests: 576 passed.
+- Complete review-repair exact-worktree tests: 580 passed.
 - Deterministic fake-peer reconstructions: 20/20 in the dedicated test.
 - Owned Codex app-server descendants after no-live qualification: zero.
 - Sanitized candidate privacy scan: passed.
