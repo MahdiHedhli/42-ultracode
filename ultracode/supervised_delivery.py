@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
@@ -1288,9 +1288,19 @@ class _CodexProcess:
         cleanup_end = time.monotonic() + _CLEANUP_SECONDS
         group_cleanup_end = max(time.monotonic(), cleanup_end - _CLEANUP_TAIL_SECONDS)
         issues: set[str] = set()
+        provisional_group_issues: set[str] = set()
 
         def remaining() -> float:
             return max(0.0, cleanup_end - time.monotonic())
+
+        def record_group_issues(observed: Iterable[str | None]) -> None:
+            for observed_issue in observed:
+                if observed_issue is None:
+                    continue
+                if observed_issue in {"process_group_probe_failed", "process_group_signal_failed"}:
+                    provisional_group_issues.add(observed_issue)
+                else:
+                    issues.add(observed_issue)
 
         try:
             for stream in (self._process.stdin, self._process.stdout):
@@ -1301,8 +1311,7 @@ class _CodexProcess:
                     except Exception:
                         issues.add("stream_close_failed")
             group_alive, issue = self._group_alive()
-            if issue is not None:
-                issues.add(issue)
+            record_group_issues((issue,))
             if self._process_group_id is None:
                 self.cleanup_actions.append("terminate_unverified_child")
                 try:
@@ -1328,21 +1337,24 @@ class _CodexProcess:
             if group_alive:
                 self.cleanup_actions.append("term_group")
                 issue = self._signal_group(signal.SIGTERM)
-                if issue is not None:
-                    issues.add(issue)
+                record_group_issues((issue,))
                 self.cleanup_actions.append("term_wait")
                 absent, group_issues = self._wait_group_absent(min(group_cleanup_end, time.monotonic() + 1.0))
-                issues.update(group_issues)
+                record_group_issues(group_issues)
+                if absent:
+                    provisional_group_issues.clear()
                 if not absent:
                     self.cleanup_actions.append("kill_group")
                     issue = self._signal_group(signal.SIGKILL)
-                    if issue is not None:
-                        issues.add(issue)
+                    record_group_issues((issue,))
                     self.cleanup_actions.append("kill_wait")
                     absent, group_issues = self._wait_group_absent(group_cleanup_end)
-                    issues.update(group_issues)
+                    record_group_issues(group_issues)
+                    if absent:
+                        provisional_group_issues.clear()
                     if not absent:
                         issues.add("process_group_still_alive")
+            issues.update(provisional_group_issues)
             try:
                 self.cleanup_actions.append("reap_child")
                 self._process.wait(timeout=remaining())

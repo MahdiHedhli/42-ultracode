@@ -8,6 +8,7 @@ import re
 import select
 import signal
 import subprocess
+import sys
 import threading
 import time
 from argparse import Namespace
@@ -605,7 +606,7 @@ def test_cleanup_descendant_term_refusal_requires_group_kill(monkeypatch) -> Non
     assert helper.joined
 
 
-def test_cleanup_probe_failure_is_categorical_but_actions_continue(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_cleanup_probe_failure_is_resolved_only_by_exact_group_absence(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     owner, _fake, signals, helper = _cleanup_fake(
         monkeypatch,
         waits=["success"],
@@ -614,7 +615,7 @@ def test_cleanup_probe_failure_is_categorical_but_actions_continue(monkeypatch) 
         probe_failures=1,
     )
     assert signals == [signal.SIGTERM]
-    assert owner.cleanup_issue == "process_group_probe_failed"
+    assert owner.cleanup_issue is None
     assert helper.joined
 
 
@@ -647,7 +648,7 @@ def test_cleanup_missing_group_identity_uses_direct_child_fallback(monkeypatch) 
 
 
 def _real_owned_cleanup(
-    command: list[str], *, wait_for_ready: bool = False
+    command: list[str], *, wait_for_ready: bool = False, wait_for_unreaped_exit: bool = False
 ) -> tuple[delivery._CodexProcess, subprocess.Popen[bytes], float]:
     process = subprocess.Popen(
         command,
@@ -661,6 +662,18 @@ def _real_owned_cleanup(
         assert process.stdout is not None
         readable, _, _ = select.select([process.stdout], [], [], 2)
         assert readable and process.stdout.readline() == b"ready\n"
+    if wait_for_unreaped_exit:
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.killpg(process.pid, 0)
+            except PermissionError:
+                break
+            except ProcessLookupError:
+                pytest.fail("Darwin removed the child group before Popen reaped it")
+            if time.monotonic() >= deadline:
+                pytest.fail("child did not reach the unreaped Darwin zombie state")
+            time.sleep(0.01)
     owner = delivery._CodexProcess(object(), delivery._Deadline(time.monotonic() - 1, 0.01))
     owner._process = process
     owner._process_group_id = process.pid
@@ -679,6 +692,19 @@ def test_real_darwin_child_is_reaped_before_group_absence() -> None:
     owner, process, elapsed = _real_owned_cleanup(["/bin/sh", "-c", "sleep 30"])
     assert owner.cleanup_issue is None
     assert process.returncode == -signal.SIGTERM
+    assert elapsed < delivery._CLEANUP_SECONDS
+    assert delivery._stderr_thread_census() == baseline
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process.pid, 0)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin reports EPERM for a zombie-only process group")
+def test_real_darwin_already_exited_unreaped_child_resolves_probe_and_signal_ambiguity() -> None:
+    baseline = delivery._stderr_thread_census()
+    owner, process, elapsed = _real_owned_cleanup(["/bin/sh", "-c", "exit 0"], wait_for_unreaped_exit=True)
+    assert owner.cleanup_issue is None
+    assert process.returncode == 0
+    assert owner.cleanup_actions[2:4] == ["term_group", "term_wait"]
     assert elapsed < delivery._CLEANUP_SECONDS
     assert delivery._stderr_thread_census() == baseline
     with pytest.raises(ProcessLookupError):
