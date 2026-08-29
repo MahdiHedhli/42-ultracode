@@ -12,7 +12,7 @@ from typing import cast
 from .controller import Controller, ControllerError
 from .dogfood import run_dogfood
 from .executor import CodexCliExecutor, ExecutorError, execute_one
-from .supervised_delivery import DeliveryError, deliver_foreground
+from .supervised_delivery import DeliveryError, DeliveryOutcome, deliver_foreground
 
 
 def _print_json(value: object) -> None:
@@ -84,7 +84,11 @@ def _supervised_delivery_command(args: argparse.Namespace) -> int:
         output_stream=sys.stdout,
     )
     _print_json({"outcome": outcome.value})
-    return 0
+    return {
+        DeliveryOutcome.DELIVERED: 0,
+        DeliveryOutcome.FAILED_BEFORE_WRITE: 20,
+        DeliveryOutcome.UNCERTAIN: 21,
+    }[outcome]
 
 
 def build_parser() -> argparse.ArgumentParser:

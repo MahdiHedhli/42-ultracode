@@ -6,19 +6,27 @@ import os
 import pty
 import re
 import select
+import signal
+import subprocess
 import threading
 import time
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
 import ultracode.supervised_delivery as delivery
+from ultracode import cli
 from ultracode.supervised_delivery import DeliveryError, DeliveryOutcome, DeliveryPreview
 
 
 def _route(root: Path) -> Path:
     path = root / "routes.json"
-    path.write_text('{"aliases":{"SYNTHETIC_TARGET":"synthetic-thread"},"version":1}', encoding="ascii")
+    path.write_text(
+        '{"aliases":{"SYNTHETIC_TARGET":{"cwd":"/synthetic/workspace",'
+        '"source_kind":"appServer","thread_id":"synthetic-thread"}},"version":2}',
+        encoding="ascii",
+    )
     path.chmod(0o600)
     return path
 
@@ -59,24 +67,43 @@ def _run(root: Path, transcript: bytes | None = None) -> tuple[DeliveryOutcome, 
 
 
 def test_protocol_profile_and_fixed_process_boundary() -> None:
-    assert delivery.APP_SERVER_ARGV == ("codex", "app-server", "--listen", "stdio://")
+    assert delivery.APP_SERVER_ARGV == ("app-server", "--listen", "stdio://")
     assert delivery.PROTOCOL_PROFILE.request_methods == {
         "initialize",
+        "thread/list",
         "thread/read",
         "thread/resume",
         "turn/start",
     }
     assert delivery.PROTOCOL_PROFILE.client_notifications == {"initialized"}
-    assert delivery.PROTOCOL_PROFILE.server_notifications == {"turn/started", "turn/completed", "error"}
+    assert delivery.PROTOCOL_PROFILE.server_notifications == {
+        "thread/status/changed",
+        "turn/started",
+        "turn/completed",
+        "error",
+    }
     assert "experimental" not in " ".join(delivery.APP_SERVER_ARGV)
 
 
-def test_twenty_deterministic_fake_peer_reconstructions(tmp_path: Path) -> None:
+def test_twenty_deterministic_fake_peer_reconstructions(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("production process creation reached")
+
+    monkeypatch.setattr(delivery.subprocess, "Popen", forbidden)
     results = []
     for index in range(20):
         result = delivery._qualify_fake_peer(tmp_path / f"run-{index:02d}")
         assert result["outcome"] == "DELIVERED"
-        assert result["request_methods"] == ["initialize", "thread/read", "thread/resume", "turn/start"]
+        assert result["request_methods"] == [
+            "initialize",
+            "thread/list",
+            "thread/list",
+            "thread/list",
+            "thread/read",
+            "thread/resume",
+            "thread/read",
+            "turn/start",
+        ]
         assert result["client_notifications"] == ["initialized"]
         assert set(result["real_operation_counters"].values()) == {0}  # type: ignore[union-attr]
         assert result["static_exclusions"] == ["automatic_loops", "browser_operations", "mcp_operations"]
@@ -155,6 +182,523 @@ def test_foreground_entry_rejects_non_tty_before_process_launch(tmp_path: Path, 
             input_stream=io.StringIO(),
             output_stream=io.StringIO(),
         )
+
+
+def test_executable_authority_is_absolute_owner_controlled_and_drift_detected(tmp_path: Path) -> None:
+    executable = tmp_path / "codex"
+    executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    authority = delivery._seal_executable(executable)
+    assert delivery._validate_executable(authority).path == executable
+    executable.write_bytes(b"#!/bin/sh\nexit 1\n")
+    with pytest.raises(DeliveryError, match="drifted"):
+        delivery._validate_executable(authority)
+    with pytest.raises(DeliveryError, match="explicit absolute"):
+        delivery._seal_executable(Path("codex"))
+
+
+def test_minimal_environment_excludes_inherited_and_injection_values() -> None:
+    environment = delivery._minimal_environment(
+        {
+            "HOME": "/safe/home",
+            "USER": "safe",
+            "PATH": "/attacker",
+            "OPENAI_API_KEY": "secret",
+            "DYLD_INSERT_LIBRARIES": "/bad",
+            "PYTHONPATH": "/bad",
+            "ARBITRARY": "bad",
+        }
+    )
+    assert environment == {"HOME": "/safe/home", "USER": "safe", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "codex-cli 0.146.0 suffix",
+        "prefix codex-cli 0.146.0",
+        "alternate-product 0.146.0",
+        "codex-cli 0.146.00",
+        "codex-cli 0.146.0 codex-cli 0.146.0",
+    ],
+)
+def test_noncanonical_versions_fail_closed(tmp_path: Path, user_agent: str) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    first = json.loads(lines[0])
+    first["result"]["userAgent"] = user_agent
+    lines[0] = delivery._canonical(first)
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+
+
+def test_schema_and_lifecycle_mutations_fail_before_write(tmp_path: Path) -> None:
+    mutations = []
+    for mutation in ("archived_membership", "active", "cwd", "source", "duplicate"):
+        lines = delivery._fake_transcript().splitlines()
+        line_index = 3 if mutation == "archived_membership" else 1
+        response = json.loads(lines[line_index])
+        if mutation == "archived_membership":
+            response["result"]["data"] = [json.loads(lines[1])["result"]["data"][0]]
+        elif mutation == "active":
+            response["result"]["data"][0]["status"] = {"activeFlags": [], "type": "active"}
+        elif mutation == "cwd":
+            response["result"]["data"][0]["cwd"] = "/wrong"
+        elif mutation == "source":
+            response["result"]["data"][0]["source"] = "cli"
+        else:
+            response["result"]["data"].append(response["result"]["data"][0])
+        lines[line_index] = delivery._canonical(response)
+        mutations.append(b"\n".join(lines) + b"\n")
+    for index, transcript in enumerate(mutations):
+        root = tmp_path / str(index)
+        root.mkdir()
+        outcome, _session, _written = _run(root, transcript)
+        assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+
+
+def test_silent_and_partial_pipe_reads_obey_deadline(tmp_path: Path) -> None:
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"payload")
+    for index, partial in enumerate((b"", b'{"jsonrpc":"2.0"')):
+        root = tmp_path / f"deadline-{index}"
+        root.mkdir()
+        read_fd, write_fd = os.pipe()
+        if partial:
+            os.write(write_fd, partial)
+        reader = os.fdopen(read_fd, "rb", buffering=0)
+        try:
+            outcome, _session = delivery._perform(
+                preview=preview,
+                capability=_confirmed(preview),
+                route_registry=_route(root),
+                journal_path=root / "journal.jsonl",
+                streams=(reader, io.BytesIO()),
+                deadline=delivery._Deadline.start(session_seconds=0.1, operation_seconds=0.05),
+            )
+            assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+        finally:
+            os.close(write_fd)
+            reader.close()
+
+
+def test_cli_outcomes_have_distinct_dispositions(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    args = Namespace(message="m", target_alias="T", route_registry="r", journal="j")
+    codes = {}
+    for outcome in DeliveryOutcome:
+        monkeypatch.setattr(cli, "deliver_foreground", lambda _outcome=outcome, **_kwargs: _outcome)
+        codes[outcome] = cli._supervised_delivery_command(args)
+    assert codes == {
+        DeliveryOutcome.DELIVERED: 0,
+        DeliveryOutcome.FAILED_BEFORE_WRITE: 20,
+        DeliveryOutcome.UNCERTAIN: 21,
+    }
+
+
+def test_thread_list_pagination_parameters_are_exact(tmp_path: Path) -> None:
+    outcome, _session, written = _run(tmp_path)
+    assert outcome is DeliveryOutcome.DELIVERED
+    requests = [json.loads(line) for line in written.splitlines()]
+    listed = [item for item in requests if item.get("method") == "thread/list"]
+    assert [item["params"]["archived"] for item in listed] == [False, False, True]
+    assert [item["params"]["cursor"] for item in listed] == [None, "page-2", None]
+    expected_common = {
+        "cwd": "/synthetic/workspace",
+        "limit": 100,
+        "sortDirection": "desc",
+        "sortKey": "created_at",
+        "sourceKinds": ["appServer"],
+        "useStateDbOnly": True,
+    }
+    for item in listed:
+        assert set(item["params"]) == {"archived", "cursor", *expected_common}
+        assert {key: item["params"][key] for key in expected_common} == expected_common
+
+
+def test_cursor_cycle_and_transient_sensitive_non_target_fail_privately(tmp_path: Path) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    second_page = json.loads(lines[2])
+    second_page["result"]["nextCursor"] = "page-2"
+    second_page["result"]["data"][0]["preview"] = "sk-" + "A" * 32
+    lines[2] = delivery._canonical(second_page)
+    outcome, _session, written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+    assert b"sk-" not in written
+
+
+@pytest.mark.parametrize("backwards", ["", "x" * 1025, 7, False])
+def test_malformed_backwards_cursor_fails_closed(tmp_path: Path, backwards: object) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    page = json.loads(lines[1])
+    page["result"]["backwardsCursor"] = backwards
+    lines[1] = delivery._canonical(page)
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+
+
+def test_empty_continuation_and_cross_archive_identity_fail_closed(tmp_path: Path) -> None:
+    for mutation in ("empty", "cross-query"):
+        root = tmp_path / mutation
+        root.mkdir()
+        lines = delivery._fake_transcript().splitlines()
+        if mutation == "empty":
+            page = json.loads(lines[2])
+            page["result"] = {"data": [], "nextCursor": "page-3"}
+            lines[2] = delivery._canonical(page)
+        else:
+            active_id = json.loads(lines[2])["result"]["data"][0]["id"]
+            archived = json.loads(lines[3])
+            archived["result"]["data"][0]["id"] = active_id
+            lines[3] = delivery._canonical(archived)
+        outcome, _session, _written = _run(root, b"\n".join(lines) + b"\n")
+        assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+
+
+@pytest.mark.parametrize(("field", "value"), [("cwd", "/other"), ("source", "cli")])
+def test_non_target_filter_drift_fails_closed(tmp_path: Path, field: str, value: str) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    page = json.loads(lines[2])
+    page["result"]["data"][0][field] = value
+    lines[2] = delivery._canonical(page)
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+
+
+@pytest.mark.parametrize("cwd", ["relative", "/a/../b", "/a/./b", "/a//b", "/a/", "/a\x00b"])
+def test_route_cwd_must_be_normalized_absolute(tmp_path: Path, cwd: str) -> None:
+    route = tmp_path / "route.json"
+    route.write_text(
+        json.dumps(
+            {
+                "aliases": {
+                    "SYNTHETIC_TARGET": {
+                        "cwd": cwd,
+                        "source_kind": "appServer",
+                        "thread_id": "synthetic-thread",
+                    }
+                },
+                "version": 2,
+            }
+        ),
+        encoding="ascii",
+    )
+    route.chmod(0o600)
+    with pytest.raises(DeliveryError, match="cwd"):
+        delivery._resolve_alias(route, "SYNTHETIC_TARGET")
+
+
+def test_ambiguous_unknown_source_kind_is_rejected(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    data = json.loads(route.read_text(encoding="ascii"))
+    data["aliases"]["SYNTHETIC_TARGET"]["source_kind"] = "unknown"
+    route.write_text(json.dumps(data), encoding="ascii")
+    with pytest.raises(DeliveryError, match="source kind"):
+        delivery._resolve_alias(route, "SYNTHETIC_TARGET")
+
+
+class _FakeStream:
+    def __init__(self, *, fail_close: bool = False) -> None:
+        self.fail_close = fail_close
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+        if self.fail_close:
+            raise OSError("synthetic close failure")
+
+
+class _FakeProcess:
+    pid = 4242
+
+    def __init__(
+        self,
+        waits: list[str],
+        *,
+        fail_stream: bool = False,
+        parent_alive: bool = True,
+        poll_error: bool = False,
+        wait_error: bool = False,
+    ) -> None:
+        self.stdin = _FakeStream(fail_close=fail_stream)
+        self.stdout = _FakeStream()
+        self.stderr = _FakeStream()
+        self.waits = waits
+        self.alive = parent_alive
+        self.poll_error = poll_error
+        self.wait_error = wait_error
+
+    def poll(self) -> int | None:
+        if self.poll_error:
+            raise OSError("synthetic poll failure")
+        return None if self.alive else 0
+
+    def wait(self, timeout: float) -> int:
+        if self.wait_error:
+            raise OSError("synthetic wait failure")
+        assert 0 <= timeout <= delivery._CLEANUP_SECONDS
+        action = self.waits.pop(0) if self.waits else "success"
+        if action == "timeout":
+            raise subprocess.TimeoutExpired("fake", timeout)
+        self.alive = False
+        return 0
+
+
+class _FakeStderr:
+    def __init__(self, issue: str | None = None, *, alive: bool = False) -> None:
+        self.issue = issue
+        self.alive = alive
+        self.joined = False
+
+    def close(self, timeout: float) -> str | None:
+        assert timeout >= 0
+        self.joined = True
+        return self.issue
+
+
+def _cleanup_fake(
+    monkeypatch,
+    *,
+    waits: list[str],
+    term_stops: bool,
+    kill_stops: bool,
+    fail_stream: bool = False,
+    helper_issue: str | None = None,
+    helper_alive: bool = False,
+    parent_alive: bool = True,
+    group_alive: bool = True,
+    probe_failures: int = 0,
+    poll_error: bool = False,
+    wait_error: bool = False,
+) -> tuple[delivery._CodexProcess, _FakeProcess, list[signal.Signals], _FakeStderr]:
+    fake = _FakeProcess(
+        waits,
+        fail_stream=fail_stream,
+        parent_alive=parent_alive,
+        poll_error=poll_error,
+        wait_error=wait_error,
+    )
+    helper = _FakeStderr(helper_issue, alive=helper_alive)
+    signals: list[signal.Signals] = []
+    group = [group_alive]
+    probes = [probe_failures]
+
+    def killpg(_pid: int, sig: signal.Signals) -> None:
+        if sig == 0:
+            if probes[0]:
+                probes[0] -= 1
+                raise OSError("synthetic probe failure")
+            if not group[0]:
+                raise ProcessLookupError
+            return
+        signals.append(sig)
+        if (sig is signal.SIGTERM and term_stops) or (sig is signal.SIGKILL and kill_stops):
+            group[0] = False
+
+    monkeypatch.setattr(delivery.os, "killpg", killpg)
+    expired = delivery._Deadline(time.monotonic() - 10, 0.01)
+    owner = delivery._CodexProcess(object(), expired)
+    owner._process = fake  # type: ignore[assignment]
+    owner._process_group_id = fake.pid
+    owner._stderr = helper  # type: ignore[assignment]
+    owner.__exit__(None, None, None)
+    return owner, fake, signals, helper
+
+
+def test_cleanup_term_success_after_shared_deadline_expiry(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, fake, signals, helper = _cleanup_fake(monkeypatch, waits=["success"], term_stops=True, kill_stops=True)
+    assert signals == [signal.SIGTERM]
+    assert owner.cleanup_issue is None
+    assert not fake.alive and helper.joined
+    assert owner.cleanup_actions == [
+        "close_stream",
+        "close_stream",
+        "term_group",
+        "term_wait",
+        "reap_child",
+        "join_stderr",
+        "close_stderr",
+    ]
+
+
+def test_cleanup_term_refusal_escalates_to_kill(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, fake, signals, helper = _cleanup_fake(monkeypatch, waits=["success"], term_stops=False, kill_stops=True)
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert owner.cleanup_issue is None
+    assert not fake.alive and helper.joined
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "issue"),
+    [
+        ({"waits": ["success"], "term_stops": True, "kill_stops": True, "fail_stream": True}, "stream_close_failed"),
+        (
+            {"waits": ["timeout"], "term_stops": False, "kill_stops": False},
+            "owned_process_alive+process_group_still_alive+process_reap_timeout",
+        ),
+        (
+            {
+                "waits": ["success"],
+                "term_stops": True,
+                "kill_stops": True,
+                "helper_issue": "stderr_helper_alive",
+                "helper_alive": True,
+            },
+            "stderr_helper_alive",
+        ),
+    ],
+)
+def test_cleanup_failures_are_categorical_and_not_swallowed(monkeypatch, kwargs: dict[str, object], issue: str) -> None:  # type: ignore[no-untyped-def]
+    owner, _fake, _signals, helper = _cleanup_fake(monkeypatch, **kwargs)  # type: ignore[arg-type]
+    assert owner.cleanup_issue == issue
+    assert helper.joined
+
+
+def test_cleanup_detects_owned_helper_thread_census_mismatch(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    census = iter((0, 1))
+    monkeypatch.setattr(delivery, "_stderr_thread_census", lambda: next(census))
+    owner, _fake, _signals, helper = _cleanup_fake(monkeypatch, waits=["success"], term_stops=True, kill_stops=True)
+    assert owner.cleanup_issue == "thread_census_mismatch"
+    assert helper.joined
+
+
+def test_cleanup_parent_exit_does_not_hide_live_descendant(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, fake, signals, helper = _cleanup_fake(
+        monkeypatch,
+        waits=["success"],
+        term_stops=True,
+        kill_stops=True,
+        parent_alive=False,
+        group_alive=True,
+    )
+    assert signals == [signal.SIGTERM]
+    assert owner.cleanup_issue is None
+    assert not fake.alive and helper.joined
+
+
+def test_cleanup_descendant_term_refusal_requires_group_kill(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, _fake, signals, helper = _cleanup_fake(
+        monkeypatch,
+        waits=["success"],
+        term_stops=False,
+        kill_stops=True,
+        parent_alive=False,
+        group_alive=True,
+    )
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert owner.cleanup_issue is None
+    assert helper.joined
+
+
+def test_cleanup_probe_failure_is_categorical_but_actions_continue(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, _fake, signals, helper = _cleanup_fake(
+        monkeypatch,
+        waits=["success"],
+        term_stops=True,
+        kill_stops=True,
+        probe_failures=1,
+    )
+    assert signals == [signal.SIGTERM]
+    assert owner.cleanup_issue == "process_group_probe_failed"
+    assert helper.joined
+
+
+def test_cleanup_poll_and_wait_errors_are_categorical(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, _fake, signals, helper = _cleanup_fake(
+        monkeypatch,
+        waits=[],
+        term_stops=True,
+        kill_stops=True,
+        poll_error=True,
+        wait_error=True,
+    )
+    assert signals == [signal.SIGTERM]
+    assert owner.cleanup_issue == "process_poll_failed+process_wait_failed"
+    assert helper.joined
+
+
+def test_cleanup_failure_downgrades_apparent_delivery_to_terminal_uncertain(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    writer = io.BytesIO()
+
+    class FailingCleanupContext:
+        cleanup_issue = "owned_process_alive"
+
+        def __enter__(self) -> tuple[io.BytesIO, io.BytesIO, object]:
+            return io.BytesIO(delivery._fake_transcript()), writer, lambda: None
+
+        def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+            return None
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("production Popen reached")
+
+    monkeypatch.setattr(delivery.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(delivery, "_CodexProcess", lambda _authority, _deadline: FailingCleanupContext())
+    preview = DeliveryPreview("SYNTHETIC_TARGET", b"synthetic supervised delivery")
+    journal = tmp_path / "journal.jsonl"
+    outcome, _session = delivery._perform(
+        preview=preview,
+        capability=_confirmed(preview),
+        route_registry=_route(tmp_path),
+        journal_path=journal,
+        executable_authority=object(),
+        attempt_id="0" * 32,
+    )
+    assert outcome is DeliveryOutcome.UNCERTAIN
+    assert [json.loads(line)["event"] for line in journal.read_bytes().splitlines()] == [
+        "ATTEMPT_STARTED",
+        "UNCERTAIN",
+    ]
+
+
+def test_execution_result_preflight_uses_production_vocabulary() -> None:
+    base = {
+        "status": "completed",
+        "summary": "D8_SUPERVISED_DELIVERY_STABLE_ELIGIBILITY_RESULT: PASS_PENDING_PLANNER_REVIEW",
+        "evidence": [],
+        "changed_files": [],
+        "tests": [],
+        "commands": [],
+        "commit": None,
+        "blockers": [],
+        "questions": [],
+        "remaining_uncertainty": [],
+        "recommended_next_action": "planner review",
+    }
+    assert delivery.preflight_qualification_result(base).status.value == "completed"
+    invalid = dict(base)
+    invalid["status"] = "PASS_PENDING_PLANNER_REVIEW"
+    with pytest.raises(DeliveryError, match="controller result envelope"):
+        delivery.preflight_qualification_result(invalid)
+
+
+def test_pinned_sequence26_schema_hashes_are_exact() -> None:
+    expected = {
+        "v2/ThreadListParams.json": "3b37cf361c29b959cf29828db3017c0a5e38d9c24de5fbd089bd44d42f05d5f0",
+        "v2/ThreadListResponse.json": "5b01b0c03141c2a15559879294ef065daac9715615d7df65371baf5f119d9958",
+        "v2/ThreadReadResponse.json": "dd1f9df782fc0e0a9d752dbf6f725634355b4889f9393074c9a71f768dcb2990",
+        "v2/ThreadResumeResponse.json": "a729b3d290402b1e7ee11661001dc194b59f0b5743cbe9e64cd6720862179865",
+        "v2/TurnStartResponse.json": "099184dc9d6195cd965b8a90ee5d1cb05c87d9b329acecdfbd63f358e660d568",
+        "v2/ThreadStatusChangedNotification.json": ("146af6d3702c4f3c844bd10b6b6b3e2b872e958a8d7d822157c19aaa6dc085f6"),
+    }
+    assert {key: delivery.PROTOCOL_PROFILE.schema_sha256[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize(
+    ("insert_at", "expected"),
+    [(6, DeliveryOutcome.FAILED_BEFORE_WRITE), (7, DeliveryOutcome.UNCERTAIN)],
+)
+def test_status_change_race_fails_on_the_correct_side_of_attempt(
+    tmp_path: Path, insert_at: int, expected: DeliveryOutcome
+) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    notification = delivery._canonical(
+        {
+            "jsonrpc": "2.0",
+            "method": "thread/status/changed",
+            "params": {"status": {"activeFlags": [], "type": "active"}, "threadId": "synthetic-thread"},
+        }
+    )
+    lines.insert(insert_at, notification)
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is expected
 
 
 def test_preview_escapes_terminal_control_sequences() -> None:
