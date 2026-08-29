@@ -1208,31 +1208,27 @@ class _CodexProcess:
         )
         self._process_group_id = self._process.pid
         try:
-            process_group_id = os.getpgid(self._process.pid)
-        except ProcessLookupError:
-            process_group_id = self._process.pid
-        except OSError as exc:
-            self._process_group_id = None
-            self.__exit__(None, None, None)
-            raise DeliveryError("app-server process-group identity is unavailable") from exc
-        if process_group_id != self._process.pid:
-            self._process_group_id = None
-            self.__exit__(None, None, None)
-            raise DeliveryError("app-server did not establish the owned process group")
-        if time.monotonic() - started > self._deadline.timeout("process spawn"):
-            self.__exit__(None, None, None)
-            raise DeliveryError("process spawn deadline expired")
-        try:
+            try:
+                process_group_id = os.getpgid(self._process.pid)
+            except ProcessLookupError:
+                process_group_id = self._process.pid
+            except OSError as exc:
+                self._process_group_id = None
+                raise DeliveryError("app-server process-group identity is unavailable") from exc
+            if process_group_id != self._process.pid:
+                self._process_group_id = None
+                raise DeliveryError("app-server did not establish the owned process group")
+            if time.monotonic() - started > self._deadline.timeout("process spawn"):
+                raise DeliveryError("process spawn deadline expired")
             _validate_executable(self._authority)
+            if self._process.stdin is None or self._process.stdout is None or self._process.stderr is None:
+                raise DeliveryError("app-server stdio pipes are unavailable")
+            self._stderr = _StderrScanner(cast(BinaryIO, self._process.stderr), self._deadline)
+            self._stderr.start()
+            return cast(BinaryIO, self._process.stdout), cast(BinaryIO, self._process.stdin), self.check
         except BaseException:
             self.__exit__(None, None, None)
             raise
-        if self._process.stdin is None or self._process.stdout is None or self._process.stderr is None:
-            self.__exit__(None, None, None)
-            raise DeliveryError("app-server stdio pipes are unavailable")
-        self._stderr = _StderrScanner(cast(BinaryIO, self._process.stderr), self._deadline)
-        self._stderr.start()
-        return cast(BinaryIO, self._process.stdout), cast(BinaryIO, self._process.stdin), self.check
 
     def check(self) -> None:
         if self._stderr is not None:

@@ -25,6 +25,8 @@ campaign results or external reviews are observed.
 - Server notifications: `turn/started`, `turn/completed`, `error`
 - Server requests, approval requests, user-input requests, unknown methods, duplicate response IDs, and malformed JSON: fail closed
 
+This pre-observation freeze is historical authority for the initial profile. The Sequence 26/27 successor contract adds stable `thread/list` and exact `thread/status/changed` handling; it supersedes this method list without changing the no-live or D0-D7 acceptance boundary.
+
 Selected installed-schema SHA-256 fingerprints:
 
 | Schema | SHA-256 |

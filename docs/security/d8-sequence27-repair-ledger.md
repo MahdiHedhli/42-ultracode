@@ -55,3 +55,26 @@ Loop 2 qualification evidence:
 - the live direct-child and `SIGTERM`-resistant descendant controls also returned exact absence with no issue;
 - the refreshed dogfood completed two bounded iterations with restart reconstruction and zero manual prompt copies; and
 - no real Codex operation or out-of-scope repository, checkpoint, inference, Event, P1, or Mac Studio access occurred.
+
+## Repair loop 3
+
+Claude verified both loop 2 findings closed, then rejected candidate `47b3cd7` because two post-spawn exceptions in `_CodexProcess.__enter__` could escape before bounded cleanup: deadline evaluation and stderr-thread startup.
+
+Bounded repair:
+
+- place every operation after successful `Popen` construction inside one cleanup-on-`BaseException` boundary;
+- add falsifiers for post-spawn deadline expiry and stderr-thread startup failure, requiring child termination and reap;
+- add a persistent probe-and-signal failure regression proving provisional ambiguity is retained when exact absence is not established; and
+- mark the initial D8 transport profile as historical and explicitly point to the Sequence 26/27 successor contract.
+
+Status: implemented and qualified; detached adversarial re-review pending.
+
+Loop 3 qualification evidence:
+
+- 77 focused supervised-delivery lifecycle and security tests passed;
+- 527 complete repository tests passed in 49.07 seconds;
+- post-spawn deadline expiry terminated and reaped the captured child with no cleanup issue;
+- simulated stderr-thread startup failure terminated and reaped the captured child while categorically recording the unstarted-helper cleanup limitation;
+- persistent probe and signal failures remained categorical when exact absence was not established;
+- the refreshed dogfood completed two bounded iterations with restart reconstruction and zero manual prompt copies; and
+- no real Codex operation or out-of-scope access occurred.

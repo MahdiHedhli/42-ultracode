@@ -483,6 +483,7 @@ def _cleanup_fake(
     parent_alive: bool = True,
     group_alive: bool = True,
     probe_failures: int = 0,
+    signal_failures: int = 0,
     poll_error: bool = False,
     wait_error: bool = False,
     owned_group: bool = True,
@@ -498,6 +499,7 @@ def _cleanup_fake(
     signals: list[signal.Signals] = []
     group = [group_alive]
     probes = [probe_failures]
+    failed_signals = [signal_failures]
 
     def killpg(_pid: int, sig: signal.Signals) -> None:
         if sig == 0:
@@ -508,6 +510,9 @@ def _cleanup_fake(
                 raise ProcessLookupError
             return
         signals.append(sig)
+        if failed_signals[0]:
+            failed_signals[0] -= 1
+            raise OSError("synthetic signal failure")
         if (sig is signal.SIGTERM and term_stops) or (sig is signal.SIGKILL and kill_stops):
             group[0] = False
 
@@ -616,6 +621,25 @@ def test_cleanup_probe_failure_is_resolved_only_by_exact_group_absence(monkeypat
     )
     assert signals == [signal.SIGTERM]
     assert owner.cleanup_issue is None
+    assert helper.joined
+
+
+def test_cleanup_unresolved_probe_and_signal_failures_remain_categorical(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(delivery, "_CLEANUP_SECONDS", 0.05)
+    monkeypatch.setattr(delivery, "_CLEANUP_TAIL_SECONDS", 0.01)
+    owner, _fake, signals, helper = _cleanup_fake(
+        monkeypatch,
+        waits=[],
+        term_stops=False,
+        kill_stops=False,
+        probe_failures=100,
+        signal_failures=2,
+    )
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert owner.cleanup_issue is not None
+    assert "process_group_probe_failed" in owner.cleanup_issue
+    assert "process_group_signal_failed" in owner.cleanup_issue
+    assert "process_group_still_alive" in owner.cleanup_issue
     assert helper.joined
 
 
@@ -738,6 +762,54 @@ def test_real_darwin_descendant_survives_term_then_is_killed_and_reaped() -> Non
     assert delivery._stderr_thread_census() == baseline
     with pytest.raises(ProcessLookupError):
         os.killpg(process.pid, 0)
+
+
+def _sleeping_executable(tmp_path: Path) -> Path:
+    executable = tmp_path / "synthetic-codex"
+    executable.write_text("#!/bin/sh\nexec /bin/sleep 30\n", encoding="ascii")
+    executable.chmod(0o700)
+    return executable
+
+
+def test_post_spawn_deadline_error_runs_bounded_cleanup(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    processes: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def capture(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(delivery.subprocess, "Popen", capture)
+    authority = delivery._seal_executable(_sleeping_executable(tmp_path))
+    owner = delivery._CodexProcess(authority, delivery._Deadline(time.monotonic() - 1, 0.01))
+    with pytest.raises(DeliveryError, match="process spawn exceeded the session deadline"):
+        owner.__enter__()
+    assert len(processes) == 1 and processes[0].returncode == -signal.SIGTERM
+    assert owner.cleanup_issue is None
+    assert "term_group" in owner.cleanup_actions and "reap_child" in owner.cleanup_actions
+
+
+def test_post_spawn_stderr_thread_start_error_runs_bounded_cleanup(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    processes: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def capture(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(delivery.subprocess, "Popen", capture)
+    monkeypatch.setattr(
+        delivery._StderrScanner, "start", lambda _self: (_ for _ in ()).throw(RuntimeError("synthetic"))
+    )
+    authority = delivery._seal_executable(_sleeping_executable(tmp_path))
+    owner = delivery._CodexProcess(authority, delivery._Deadline.start(session_seconds=5, operation_seconds=1))
+    with pytest.raises(RuntimeError, match="synthetic"):
+        owner.__enter__()
+    assert len(processes) == 1 and processes[0].returncode == -signal.SIGTERM
+    assert owner.cleanup_issue == "stderr_helper_close_failed"
+    assert "term_group" in owner.cleanup_actions and "reap_child" in owner.cleanup_actions
 
 
 def test_cleanup_failure_downgrades_apparent_delivery_to_terminal_uncertain(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
