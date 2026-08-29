@@ -19,8 +19,8 @@ def test_only_fixed_subprocess_launch_exists() -> None:
         and node.func.value.id == "subprocess"
         and node.func.attr == "Popen"
     ]
-    assert len(launches) == 1
-    launch = launches[0]
+    assert len(launches) == 2
+    launch = next(item for item in launches if isinstance(item.args[0], ast.Tuple))
     assert isinstance(launch.args[0], ast.Tuple)
     keywords = {item.arg: item.value for item in launch.keywords}
     assert isinstance(keywords["shell"], ast.Constant) and keywords["shell"].value is False
@@ -31,8 +31,10 @@ def test_only_fixed_subprocess_launch_exists() -> None:
 
 def test_identity_probes_are_fixed_and_pinned() -> None:
     source = Path(inspect.getfile(subject)).read_text(encoding="utf-8")
-    assert '[str(_CODEX_EXECUTABLE), "--version"]' in source
-    assert '["/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE)]' in source
+    assert '(str(_CODEX_EXECUTABLE), "--version")' in source
+    assert '("/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE))' in source
+    assert "start_new_session=True" in source
+    assert "os.killpg(process.pid, signal.SIGKILL)" in source
     assert subject._EXPECTED_CODEX_TEAM_ID == "2DC432GLL2"
     assert subject._EXPECTED_CODEX_SHA256 == ("dd304ffe232fa9e782ed3e5358776d270e394c2fb85cab846f989823f0843313")
     assert 'component == Path("/Applications")' in source

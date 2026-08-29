@@ -50,14 +50,36 @@ Repair: separate TTY admissibility from challenge generation. The public entry
 point now rejects non-TTY streams without a child process, verifies the pinned
 production identity, and only then permits fresh challenge rendering.
 
+## Review repair loop 4
+
+Claude rejected the first exact-tree candidate with one blocker:
+schema-defined null `section` and null `section.appearance` were
+over-rejected. It also required reproducible schema evidence, bounded identity
+probe accounting, host-independent unit tests, and current optional turn-shape
+coverage.
+
+Repair:
+
+- accept and exercise both nullable section forms;
+- centralize the exact current turn projection and use it for responses and
+  notifications;
+- recognize the exact error-notification envelope and fail closed;
+- run only two fixed identity probes in owned process groups with bounded
+  output, wait, kill, and reap behavior;
+- remove installed-app dependencies from unit falsifiers;
+- add a committed raw-hash and semantic-path verifier plus sanitized evidence;
+  and
+- retain the installed-app identity check as an explicit host qualification
+  outside portable unit tests.
+
 ## Qualification
 
 - Raw schemas: 14/14 exact.
 - Focused delivery/security tests: 97 passed before the final ordering
   regression.
 - Official format, lint, and strict typing gates: passed.
-- Complete final exact-worktree tests: 556 passed.
-- Focused fake-peer and Darwin cleanup run: 19 passed.
+- Complete review-repair exact-worktree tests: 559 passed.
+- Focused fake-peer, identity-probe, and Darwin cleanup run: 21 passed.
 - Owned Codex app-server descendants after no-live qualification: zero.
 - Sanitized candidate privacy scan: passed.
 - Unrelated-project access: none.

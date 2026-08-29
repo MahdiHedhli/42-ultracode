@@ -27,8 +27,22 @@ thread shape: `projectId` is required and nullable, `section` and
 `sectionEnteredAt` are optional, and the removed `isPinned` field is
 rejected.
 
-Schema hashes are compared as an exact mapping. Missing, extra, or changed
-entries fail closed.
+The no-live qualification command generates a fresh schema bundle and compares
+its hashes as an exact mapping. Missing, extra, or changed entries fail the
+qualification. The production transport separately pins the exact executable
+content hash, so a launch cannot substitute a different qualified binary.
+
+The committed verifier also compares the accepted 0.146 and current 0.149 JSON
+trees and requires the reviewed changed-path set. The sanitized result is
+`d8-sequence28-schema-evidence.json`.
+
+## Fixed identity probes
+
+The version and code-signature display probes are exact allowlisted commands.
+Each launches in a new process group with closed descriptors, bounded output,
+and bounded wait. An exceptional or timed-out probe kills its owned group and
+reaps the direct child before failing closed. Probe output is parsed in memory
+and is not persisted.
 
 ## Scope
 

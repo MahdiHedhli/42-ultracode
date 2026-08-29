@@ -888,29 +888,89 @@ def test_schema_hash_verifier_rejects_each_wrong_digest(name: str) -> None:
 
 
 def test_production_identity_rejects_executable_hash_drift(monkeypatch: pytest.MonkeyPatch) -> None:
-    authority = delivery._seal_executable(delivery._CODEX_EXECUTABLE)
-    original = delivery._validate_executable
-
-    def changed(selected: object) -> delivery._ExecutableRecord:
-        record = original(selected)
-        return delivery._ExecutableRecord(
-            path=record.path,
-            device=record.device,
-            inode=record.inode,
-            size=record.size,
-            mode=record.mode,
-            uid=record.uid,
-            mtime_ns=record.mtime_ns,
-            sha256="0" * 64,
-        )
-
-    monkeypatch.setattr(delivery, "_validate_executable", changed)
+    authority = object()
+    changed = delivery._ExecutableRecord(
+        path=delivery._CODEX_EXECUTABLE,
+        device=1,
+        inode=2,
+        size=3,
+        mode=0o100755,
+        uid=501,
+        mtime_ns=4,
+        sha256="0" * 64,
+    )
+    monkeypatch.setattr(delivery, "_validate_executable", lambda selected: changed if selected is authority else None)
     with pytest.raises(DeliveryError, match="executable hash"):
         delivery._require_production_identity(authority)
 
 
+def test_fixed_identity_probe_is_allowlisted_owned_and_reaped(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def communicate(self, *, timeout: int) -> tuple[bytes, bytes]:
+            assert timeout == 10
+            return b"codex-cli 0.149.0-alpha.4.3\n", b""
+
+    def popen(argv: tuple[str, ...], **kwargs: object) -> Process:
+        observed["argv"] = argv
+        observed.update(kwargs)
+        return Process()
+
+    monkeypatch.setattr(delivery.subprocess, "Popen", popen)
+    stdout, stderr = delivery._run_fixed_identity_probe((str(delivery._CODEX_EXECUTABLE), "--version"))
+    assert stdout == b"codex-cli 0.149.0-alpha.4.3\n"
+    assert stderr == b""
+    assert observed["close_fds"] is True
+    assert observed["start_new_session"] is True
+    with pytest.raises(DeliveryError, match="allowlist"):
+        delivery._run_fixed_identity_probe(("/usr/bin/true",))
+
+
+def test_fixed_identity_probe_timeout_kills_group_and_reaps(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+
+    class Process:
+        pid = 456
+        returncode = None
+        attempts = 0
+
+        def communicate(self, *, timeout: int) -> tuple[bytes, bytes]:
+            self.attempts += 1
+            calls.append(("communicate", timeout))
+            if self.attempts == 1:
+                raise subprocess.TimeoutExpired("probe", timeout)
+            self.returncode = -signal.SIGKILL
+            return b"", b""
+
+    process = Process()
+    monkeypatch.setattr(delivery.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(delivery.os, "killpg", lambda pid, sig: calls.append(("killpg", pid, sig)))
+    with pytest.raises(DeliveryError, match="did not complete"):
+        delivery._run_fixed_identity_probe((str(delivery._CODEX_EXECUTABLE), "--version"))
+    assert calls == [
+        ("communicate", 10),
+        ("killpg", 456, signal.SIGKILL),
+        ("communicate", 3),
+    ]
+
+
 def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) -> None:
-    authority = delivery._seal_executable(delivery._CODEX_EXECUTABLE)
+    authority = object()
+    record = delivery._ExecutableRecord(
+        path=delivery._CODEX_EXECUTABLE,
+        device=1,
+        inode=2,
+        size=3,
+        mode=0o100755,
+        uid=501,
+        mtime_ns=4,
+        sha256=delivery._EXPECTED_CODEX_SHA256,
+    )
+    monkeypatch.setattr(delivery, "_validate_executable", lambda selected: record if selected is authority else None)
     monkeypatch.setattr(
         delivery,
         "_inspect_desktop_identity",
@@ -938,7 +998,18 @@ def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) ->
 def test_production_identity_rejects_signer_or_app_drift(
     monkeypatch: pytest.MonkeyPatch, field: str, wrong: str
 ) -> None:
-    authority = delivery._seal_executable(delivery._CODEX_EXECUTABLE)
+    authority = object()
+    record = delivery._ExecutableRecord(
+        path=delivery._CODEX_EXECUTABLE,
+        device=1,
+        inode=2,
+        size=3,
+        mode=0o100755,
+        uid=501,
+        mtime_ns=4,
+        sha256=delivery._EXPECTED_CODEX_SHA256,
+    )
+    monkeypatch.setattr(delivery, "_validate_executable", lambda selected: record if selected is authority else None)
     values = {
         "cli_version": delivery._EXPECTED_USER_AGENT,
         "authority": delivery._EXPECTED_CODEX_AUTHORITY,
@@ -986,6 +1057,15 @@ def test_thread_accepts_current_project_and_section_shape() -> None:
         "appearance": {"color": None, "icon": "circle"},
     }
     thread["sectionEnteredAt"] = None
+    assert delivery._JsonlSession._thread(thread, route) == "idle"
+
+
+def test_thread_accepts_nullable_section_and_appearance() -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    assert thread["section"] is None
+    assert delivery._JsonlSession._thread(thread, route) == "idle"
+    thread["section"] = {"id": "section-1", "name": "Main", "appearance": None}
     assert delivery._JsonlSession._thread(thread, route) == "idle"
 
 

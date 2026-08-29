@@ -355,6 +355,86 @@ def _minimal_environment(source: Mapping[str, str] | None = None) -> dict[str, s
     return environment
 
 
+_FIXED_IDENTITY_PROBES = frozenset(
+    {
+        (str(_CODEX_EXECUTABLE), "--version"),
+        ("/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE)),
+    }
+)
+
+
+def _run_fixed_identity_probe(argv: tuple[str, ...]) -> tuple[bytes, bytes]:
+    if argv not in _FIXED_IDENTITY_PROBES:
+        raise DeliveryError("identity probe is outside the fixed command allowlist")
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_minimal_environment(),
+            close_fds=True,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise DeliveryError("cannot launch installed Codex Desktop identity probe") from exc
+    try:
+        stdout, stderr = process.communicate(timeout=10)
+    except BaseException as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as cleanup_exc:
+            raise DeliveryError("identity probe process group could not be contained") from cleanup_exc
+        try:
+            stdout, stderr = process.communicate(timeout=3)
+        except (OSError, subprocess.SubprocessError) as cleanup_exc:
+            raise DeliveryError("identity probe process could not be reaped") from cleanup_exc
+        raise DeliveryError("installed Codex Desktop identity probe did not complete") from exc
+    if process.returncode != 0:
+        raise DeliveryError("installed Codex Desktop identity probe failed")
+    if len(stdout) > _MAX_STDERR_BYTES or len(stderr) > _MAX_STDERR_BYTES:
+        raise DeliveryError("installed Codex Desktop identity probe exceeded its output bound")
+    return stdout, stderr
+
+
+def _read_app_info_plist() -> Mapping[str, object]:
+    path = _CODEX_EXECUTABLE.parents[1] / "Info.plist"
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise DeliveryError("Codex Desktop application identity is unavailable") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid not in {0, os.getuid()}
+            or info.st_mode & 0o022
+            or info.st_size <= 0
+            or info.st_size > _MAX_LINE_BYTES
+        ):
+            raise DeliveryError("Codex Desktop application identity is unsafe")
+        raw = bytearray()
+        while len(raw) < info.st_size:
+            chunk = os.read(fd, min(65536, info.st_size - len(raw)))
+            if not chunk:
+                raise DeliveryError("Codex Desktop application identity changed during read")
+            raw.extend(chunk)
+        if os.read(fd, 1):
+            raise DeliveryError("Codex Desktop application identity changed during read")
+    finally:
+        os.close(fd)
+    try:
+        value = plistlib.loads(bytes(raw))
+    except (plistlib.InvalidFileException, ValueError) as exc:
+        raise DeliveryError("Codex Desktop application identity is invalid") from exc
+    if type(value) is not dict:
+        raise DeliveryError("Codex Desktop application identity is invalid")
+    return cast(dict[str, object], value)
+
+
 @dataclass(frozen=True, slots=True)
 class _DesktopIdentity:
     cli_version: str
@@ -366,25 +446,14 @@ class _DesktopIdentity:
 
 def _inspect_desktop_identity() -> _DesktopIdentity:
     try:
-        version = subprocess.run(
-            [str(_CODEX_EXECUTABLE), "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=_minimal_environment(),
-        ).stdout.strip()
-        signature = subprocess.run(
-            ["/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=_minimal_environment(),
-        ).stderr
-        with Path("/Applications/Codex.app/Contents/Info.plist").open("rb") as stream:
-            info = plistlib.load(stream)
-    except (OSError, subprocess.SubprocessError, plistlib.InvalidFileException, ValueError) as exc:
+        version_stdout, _version_stderr = _run_fixed_identity_probe((str(_CODEX_EXECUTABLE), "--version"))
+        _signature_stdout, signature_stderr = _run_fixed_identity_probe(
+            ("/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE))
+        )
+        version = version_stdout.decode("utf-8", "strict").strip()
+        signature = signature_stderr.decode("utf-8", "strict")
+        info = _read_app_info_plist()
+    except (OSError, UnicodeError, ValueError) as exc:
         raise DeliveryError("cannot establish installed Codex Desktop identity") from exc
     authority = next(
         (line.removeprefix("Authority=") for line in signature.splitlines() if line.startswith("Authority=")),
@@ -963,6 +1032,28 @@ class _JsonlSession:
             raise DeliveryError("target thread became ineligible")
 
     @staticmethod
+    def _turn(value: object) -> dict[object, object]:
+        if type(value) is not dict:
+            raise DeliveryError("turn violates the selected schema")
+        turn = cast(dict[object, object], value)
+        required = {"id", "items", "status"}
+        allowed = required | {"completedAt", "durationMs", "error", "itemsView", "startedAt"}
+        if not required.issubset(turn) or not set(turn).issubset(allowed):
+            raise DeliveryError("turn violates the selected field set")
+        if type(turn["id"]) is not str or type(turn["items"]) is not list:
+            raise DeliveryError("turn identity or items violate the selected schema")
+        if turn["status"] not in {"completed", "interrupted", "failed", "inProgress"}:
+            raise DeliveryError("turn status violates the selected schema")
+        for field in ("completedAt", "durationMs", "startedAt"):
+            if field in turn and turn[field] is not None and type(turn[field]) is not int:
+                raise DeliveryError("turn timing violates the selected schema")
+        if "itemsView" in turn and turn["itemsView"] not in {"notLoaded", "summary", "full"}:
+            raise DeliveryError("turn items view violates the selected schema")
+        if "error" in turn and turn["error"] is not None and type(turn["error"]) is not dict:
+            raise DeliveryError("turn error violates the selected schema")
+        return turn
+
+    @staticmethod
     def _thread(value: object, route: _RouteAuthority) -> str:
         if type(value) is not dict:
             raise DeliveryError("thread violates the selected schema")
@@ -1010,17 +1101,7 @@ class _JsonlSession:
         if type(turns) is not list or len(cast(list[object], turns)) > 128:
             raise DeliveryError("thread turns violate the selected schema")
         for turn in cast(list[object], turns):
-            if type(turn) is not dict:
-                raise DeliveryError("thread turn violates the selected schema")
-            selected_turn = cast(dict[object, object], turn)
-            required_turn = {"id", "items", "status"}
-            allowed_turn = required_turn | {"completedAt", "durationMs", "error", "itemsView", "startedAt"}
-            if not required_turn.issubset(selected_turn) or not set(selected_turn).issubset(allowed_turn):
-                raise DeliveryError("thread turn violates the selected field set")
-            if type(selected_turn["id"]) is not str or type(selected_turn["items"]) is not list:
-                raise DeliveryError("thread turn types violate the selected schema")
-            if selected_turn["status"] not in {"completed", "interrupted", "failed", "inProgress"}:
-                raise DeliveryError("thread turn status violates the selected schema")
+            _JsonlSession._turn(turn)
         nullable_strings = (
             "agentNickname",
             "agentRole",
@@ -1043,24 +1124,27 @@ class _JsonlSession:
             raise DeliveryError("thread section entry time violates the selected schema")
         if "section" in thread:
             section = thread["section"]
-            if type(section) is not dict:
+            if section is None:
+                pass
+            elif type(section) is not dict:
                 raise DeliveryError("thread section violates the selected schema")
-            selected_section = cast(dict[object, object], section)
-            if not {"id", "name"}.issubset(selected_section) or not set(selected_section).issubset(
-                {"id", "name", "appearance"}
-            ):
-                raise DeliveryError("thread section violates the selected field set")
-            if type(selected_section["id"]) is not str or type(selected_section["name"]) is not str:
-                raise DeliveryError("thread section identity violates the selected schema")
-            if "appearance" in selected_section:
-                appearance = selected_section["appearance"]
-                if type(appearance) is not dict:
-                    raise DeliveryError("thread section appearance violates the selected schema")
-                selected_appearance = cast(dict[object, object], appearance)
-                if not set(selected_appearance).issubset({"color", "icon"}) or any(
-                    value is not None and type(value) is not str for value in selected_appearance.values()
+            else:
+                selected_section = cast(dict[object, object], section)
+                if not {"id", "name"}.issubset(selected_section) or not set(selected_section).issubset(
+                    {"id", "name", "appearance"}
                 ):
-                    raise DeliveryError("thread section appearance violates the selected schema")
+                    raise DeliveryError("thread section violates the selected field set")
+                if type(selected_section["id"]) is not str or type(selected_section["name"]) is not str:
+                    raise DeliveryError("thread section identity violates the selected schema")
+                if "appearance" in selected_section and selected_section["appearance"] is not None:
+                    appearance = selected_section["appearance"]
+                    if type(appearance) is not dict:
+                        raise DeliveryError("thread section appearance violates the selected schema")
+                    selected_appearance = cast(dict[object, object], appearance)
+                    if not set(selected_appearance).issubset({"color", "icon"}) or any(
+                        value is not None and type(value) is not str for value in selected_appearance.values()
+                    ):
+                        raise DeliveryError("thread section appearance violates the selected schema")
         if "gitInfo" in thread and thread["gitInfo"] is not None and type(thread["gitInfo"]) is not dict:
             raise DeliveryError("thread git information violates the selected schema")
         if thread["source"] != route.source_kind or thread["cwd"] != route.cwd:
@@ -1188,15 +1272,8 @@ class _JsonlSession:
         if set(started) != {"turn"}:
             raise DeliveryError("turn/start response violates the selected schema")
         turn = started.get("turn")
-        if type(turn) is not dict:
-            raise DeliveryError("turn/start response identity is invalid")
-        selected_turn = cast(dict[object, object], turn)
-        if (
-            set(selected_turn) != {"id", "items", "status"}
-            or type(selected_turn.get("id")) is not str
-            or type(selected_turn.get("items")) is not list
-            or selected_turn.get("status") != "inProgress"
-        ):
+        selected_turn = self._turn(turn)
+        if selected_turn.get("status") != "inProgress":
             raise DeliveryError("turn/start response violates the selected schema")
         turn_id = cast(str, selected_turn["id"])
         saw_started = False
@@ -1216,21 +1293,23 @@ class _JsonlSession:
             if method == "thread/status/changed":
                 self._accept_status_notification(message_obj)
                 continue
+            if method == "error":
+                if (
+                    set(values) != {"error", "threadId", "turnId", "willRetry"}
+                    or values.get("threadId") != thread_id
+                    or values.get("turnId") != turn_id
+                    or type(values.get("willRetry")) is not bool
+                    or type(values.get("error")) is not dict
+                ):
+                    raise DeliveryError("error notification violates the selected schema")
+                raise DeliveryError("app-server reported a turn error")
             if set(values) != {"threadId", "turn"}:
                 raise DeliveryError("server notification params violate the selected schema")
             if values.get("threadId") != thread_id:
                 raise DeliveryError("server notification thread mismatch")
-            if method == "error":
-                raise DeliveryError("app-server reported a turn error")
             notified_turn = values.get("turn")
-            if type(notified_turn) is not dict:
-                raise DeliveryError("server notification turn mismatch")
-            selected = cast(dict[object, object], notified_turn)
-            if (
-                set(selected) != {"id", "items", "status"}
-                or selected.get("id") != turn_id
-                or type(selected.get("items")) is not list
-            ):
+            selected = self._turn(notified_turn)
+            if selected.get("id") != turn_id:
                 raise DeliveryError("server notification turn violates the selected schema")
             if method == "turn/started":
                 if saw_started:
@@ -1631,6 +1710,8 @@ def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
         "modelProvider": "openai",
         "preview": "synthetic",
         "projectId": None,
+        "section": None,
+        "sectionEnteredAt": None,
         "sessionId": "synthetic-session",
         "source": "appServer",
         "status": {"type": "idle"},
@@ -1641,7 +1722,16 @@ def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
     other["id"] = "active-non-target-thread"
     archived_other = dict(thread)
     archived_other["id"] = "archived-non-target-thread"
-    turn = {"id": "synthetic-turn", "items": [], "status": "inProgress"}
+    turn: dict[str, object] = {
+        "completedAt": None,
+        "durationMs": None,
+        "error": None,
+        "id": "synthetic-turn",
+        "items": [],
+        "itemsView": "full",
+        "startedAt": None,
+        "status": "inProgress",
+    }
     completed = dict(turn)
     completed["status"] = "completed"
     messages: Sequence[Mapping[str, object]] = (

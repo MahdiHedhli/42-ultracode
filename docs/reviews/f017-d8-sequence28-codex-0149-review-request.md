@@ -38,8 +38,13 @@ schemas semantically unchanged and ten changed:
   initialize params, and error notification.
 
 The current consumed thread projection requires nullable `projectId`, accepts
-only the bounded optional `section` and `sectionEnteredAt` shapes, and
-rejects the removed `isPinned`.
+the bounded nullable `section`, nullable `section.appearance`, and optional
+`sectionEnteredAt` shapes, and rejects the removed `isPinned`. Current turn
+optional fields are accepted only through one shared typed projection.
+
+The exact reproducible changed-path set and both raw-hash maps are committed in
+`docs/security/d8-sequence28-schema-evidence.json`; the verifier is
+`scripts/verify_codex_schema_profile.py`.
 
 ## Reviewer questions
 
@@ -53,6 +58,8 @@ rejects the removed `isPinned`.
    and Darwin cleanup boundaries?
 5. Did any change create a live transport operation or unrelated-project
    dependency?
+6. Are the two fixed identity probes bounded, contained, and reaped on every
+   path without entering delivery-operation accounting?
 
 ## Required validation
 
