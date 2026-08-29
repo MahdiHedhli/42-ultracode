@@ -114,6 +114,14 @@ Repair:
 - test list and object drift at both boundaries as categorical
   `DeliveryError` failures.
 
+## Review repair loop 8
+
+Grok found that the loop 7 journal falsifier exercised list drift but not the
+object drift claimed by the ledger.
+
+Repair: exercise both list and object journal-event drift through the persisted
+journal parser and require the same categorical `DeliveryError` result.
+
 ## Qualification
 
 - Raw schemas: 14/14 exact.

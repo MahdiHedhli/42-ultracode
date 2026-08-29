@@ -1347,13 +1347,14 @@ def test_partial_or_corrupt_journal_fails_closed(tmp_path: Path) -> None:
     _run(valid_root)
     valid = valid_root / "journal.jsonl"
     records = [json.loads(line) for line in valid.read_bytes().splitlines()]
-    invalid_event_records = [dict(record) for record in records]
-    invalid_event_records[0]["event"] = []
-    invalid_event = tmp_path / "invalid-event.jsonl"
-    invalid_event.write_bytes(b"".join(delivery._canonical(record) + b"\n" for record in invalid_event_records))
-    invalid_event.chmod(0o600)
-    with pytest.raises(DeliveryError, match="journal event"), delivery._Journal(invalid_event):
-        pass
+    for index, invalid_event_value in enumerate(([], {})):
+        invalid_event_records = [dict(record) for record in records]
+        invalid_event_records[0]["event"] = invalid_event_value
+        invalid_event = tmp_path / f"invalid-event-{index}.jsonl"
+        invalid_event.write_bytes(b"".join(delivery._canonical(record) + b"\n" for record in invalid_event_records))
+        invalid_event.chmod(0o600)
+        with pytest.raises(DeliveryError, match="journal event"), delivery._Journal(invalid_event):
+            pass
 
     records[0]["record_sha256"] = "0" * 64
     invalid_hash = tmp_path / "invalid-hash.jsonl"
