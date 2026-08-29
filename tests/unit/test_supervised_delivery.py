@@ -867,16 +867,154 @@ def test_execution_result_preflight_uses_production_vocabulary() -> None:
         delivery.preflight_qualification_result(invalid)
 
 
-def test_pinned_sequence26_schema_digest_literals_are_change_detector_pins() -> None:
+def test_pinned_sequence28_schema_digest_literals_are_change_detector_pins() -> None:
     expected = {
-        "v2/ThreadListParams.json": "3b37cf361c29b959cf29828db3017c0a5e38d9c24de5fbd089bd44d42f05d5f0",
-        "v2/ThreadListResponse.json": "5b01b0c03141c2a15559879294ef065daac9715615d7df65371baf5f119d9958",
-        "v2/ThreadReadResponse.json": "dd1f9df782fc0e0a9d752dbf6f725634355b4889f9393074c9a71f768dcb2990",
-        "v2/ThreadResumeResponse.json": "a729b3d290402b1e7ee11661001dc194b59f0b5743cbe9e64cd6720862179865",
-        "v2/TurnStartResponse.json": "099184dc9d6195cd965b8a90ee5d1cb05c87d9b329acecdfbd63f358e660d568",
-        "v2/ThreadStatusChangedNotification.json": ("146af6d3702c4f3c844bd10b6b6b3e2b872e958a8d7d822157c19aaa6dc085f6"),
+        "v2/ThreadListParams.json": "b227bb78acf9b91060d03c56d3f2072cdd9f1bd08290c11e8869f1a663b16da2",
+        "v2/ThreadListResponse.json": "d12dce8505f06cb53404bdac3cbfffbb64f8808ff48556f7d09996f2198e0719",
+        "v2/ThreadReadResponse.json": "96017b5053c54ccddd8f8a1d8a07fb850e88bd761ad9e17fc9cb0b82a6870fe8",
+        "v2/ThreadResumeResponse.json": "32fc20f4853f89bcee82dba6065751e0b08c104cf6a5c51f9c1aa658d1ce9154",
+        "v2/TurnStartResponse.json": "1203962cc16ebf6e1474935a979e07bb054afb9b47060cafb5f4674e56a589d2",
+        "v2/ThreadStatusChangedNotification.json": ("26f3c60c1b73f7fa2d31c74429cdc36f8746c76c33e3d314b3fb61d3661f05f6"),
     }
     assert {key: delivery.PROTOCOL_PROFILE.schema_sha256[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize("name", sorted(delivery.PROTOCOL_PROFILE.schema_sha256))
+def test_schema_hash_verifier_rejects_each_wrong_digest(name: str) -> None:
+    actual = dict(delivery.PROTOCOL_PROFILE.schema_sha256)
+    actual[name] = "0" * 64
+    with pytest.raises(DeliveryError, match="schema bundle"):
+        delivery._verify_schema_hashes(actual)
+
+
+def test_production_identity_rejects_executable_hash_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    authority = delivery._seal_executable(delivery._CODEX_EXECUTABLE)
+    original = delivery._validate_executable
+
+    def changed(selected: object) -> delivery._ExecutableRecord:
+        record = original(selected)
+        return delivery._ExecutableRecord(
+            path=record.path,
+            device=record.device,
+            inode=record.inode,
+            size=record.size,
+            mode=record.mode,
+            uid=record.uid,
+            mtime_ns=record.mtime_ns,
+            sha256="0" * 64,
+        )
+
+    monkeypatch.setattr(delivery, "_validate_executable", changed)
+    with pytest.raises(DeliveryError, match="executable hash"):
+        delivery._require_production_identity(authority)
+
+
+def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    authority = delivery._seal_executable(delivery._CODEX_EXECUTABLE)
+    monkeypatch.setattr(
+        delivery,
+        "_inspect_desktop_identity",
+        lambda: delivery._DesktopIdentity(
+            cli_version="codex-cli 0.146.0",
+            authority=delivery._EXPECTED_CODEX_AUTHORITY,
+            team_id=delivery._EXPECTED_CODEX_TEAM_ID,
+            app_version=delivery._EXPECTED_CODEX_APP_VERSION,
+            app_build=delivery._EXPECTED_CODEX_APP_BUILD,
+        ),
+    )
+    with pytest.raises(DeliveryError, match="Desktop identity"):
+        delivery._require_production_identity(authority)
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong"),
+    [
+        ("authority", "Developer ID Application: Untrusted (2DC432GLL2)"),
+        ("team_id", "UNTRUSTED1"),
+        ("app_version", "0.0.0"),
+        ("app_build", "0"),
+    ],
+)
+def test_production_identity_rejects_signer_or_app_drift(
+    monkeypatch: pytest.MonkeyPatch, field: str, wrong: str
+) -> None:
+    authority = delivery._seal_executable(delivery._CODEX_EXECUTABLE)
+    values = {
+        "cli_version": delivery._EXPECTED_USER_AGENT,
+        "authority": delivery._EXPECTED_CODEX_AUTHORITY,
+        "team_id": delivery._EXPECTED_CODEX_TEAM_ID,
+        "app_version": delivery._EXPECTED_CODEX_APP_VERSION,
+        "app_build": delivery._EXPECTED_CODEX_APP_BUILD,
+    }
+    values[field] = wrong
+    monkeypatch.setattr(delivery, "_inspect_desktop_identity", lambda: delivery._DesktopIdentity(**values))
+    with pytest.raises(DeliveryError, match="Desktop identity"):
+        delivery._require_production_identity(authority)
+
+
+def test_production_identity_failure_precedes_human_challenge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    message = tmp_path / "message.txt"
+    message.write_bytes(b"synthetic supervised delivery")
+    message.chmod(0o600)
+
+    def rejected() -> object:
+        raise DeliveryError("production identity rejected")
+
+    def challenge_forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("human challenge reached before production identity validation")
+
+    monkeypatch.setattr(delivery, "_require_interactive_tty", lambda *_args: None)
+    monkeypatch.setattr(delivery, "_seal_production_executable", rejected)
+    monkeypatch.setattr(delivery, "confirm_preview", challenge_forbidden)
+    with pytest.raises(DeliveryError, match="production identity rejected"):
+        delivery.deliver_foreground(
+            message_path=message,
+            target_alias="SYNTHETIC_TARGET",
+            route_registry=tmp_path / "routes.json",
+            journal_path=tmp_path / "journal.jsonl",
+            input_stream=io.StringIO(),
+            output_stream=io.StringIO(),
+        )
+
+
+def test_thread_accepts_current_project_and_section_shape() -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    thread["section"] = {
+        "id": "section-1",
+        "name": "Main",
+        "appearance": {"color": None, "icon": "circle"},
+    }
+    thread["sectionEnteredAt"] = None
+    assert delivery._JsonlSession._thread(thread, route) == "idle"
+
+
+@pytest.mark.parametrize("field", ["projectId", "section"])
+def test_thread_rejects_invalid_current_consumed_fields(field: str) -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    thread[field] = 3 if field == "projectId" else {"id": "section-1", "name": 3}
+    with pytest.raises(DeliveryError):
+        delivery._JsonlSession._thread(thread, route)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["project_removed", "project_renamed", "status_widened", "section_ambiguous"],
+)
+def test_thread_rejects_consumed_field_removal_rename_widening_or_ambiguity(mutation: str) -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    if mutation == "project_removed":
+        del thread["projectId"]
+    elif mutation == "project_renamed":
+        thread["project_id"] = thread.pop("projectId")
+    elif mutation == "status_widened":
+        thread["status"] = {"type": "future"}
+    else:
+        thread["section"] = {"id": "section-1", "name": "Main", "unexpected": True}
+    with pytest.raises(DeliveryError):
+        delivery._JsonlSession._thread(thread, route)
 
 
 @pytest.mark.parametrize(

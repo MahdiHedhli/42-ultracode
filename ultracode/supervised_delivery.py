@@ -6,6 +6,7 @@ import fcntl
 import io
 import json
 import os
+import plistlib
 import posixpath
 import re
 import secrets
@@ -53,7 +54,12 @@ _DEFAULT_OPERATION_SECONDS = 5.0
 _CLEANUP_TAIL_SECONDS = 0.5
 _CLEANUP_SECONDS = 3.0
 _SYMBOL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-_EXPECTED_USER_AGENT = "codex-cli 0.146.0"
+_EXPECTED_USER_AGENT = "codex-cli 0.149.0-alpha.4.3"
+_EXPECTED_CODEX_SHA256 = "dd304ffe232fa9e782ed3e5358776d270e394c2fb85cab846f989823f0843313"
+_EXPECTED_CODEX_AUTHORITY = "Developer ID Application: OpenAI OpCo, LLC (2DC432GLL2)"
+_EXPECTED_CODEX_TEAM_ID = "2DC432GLL2"
+_EXPECTED_CODEX_APP_VERSION = "26.818.61809"
+_EXPECTED_CODEX_APP_BUILD = "7019"
 _QUALIFICATION_RESULT = "D8_SUPERVISED_DELIVERY_STABLE_ELIGIBILITY_RESULT: PASS_PENDING_PLANNER_REVIEW"
 _SECRET_BYTES = (
     re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -103,28 +109,28 @@ class _OperationCounters:
 
 
 PROTOCOL_PROFILE = ProtocolProfile(
-    codex_version="codex-cli 0.146.0",
+    codex_version=_EXPECTED_USER_AGENT,
     request_methods=frozenset({"initialize", "thread/list", "thread/read", "thread/resume", "turn/start"}),
     client_notifications=frozenset({"initialized"}),
     server_notifications=frozenset({"thread/status/changed", "turn/started", "turn/completed", "error"}),
     schema_sha256=MappingProxyType(
         {
-            "v2/ThreadListParams.json": "3b37cf361c29b959cf29828db3017c0a5e38d9c24de5fbd089bd44d42f05d5f0",
-            "v2/ThreadListResponse.json": "5b01b0c03141c2a15559879294ef065daac9715615d7df65371baf5f119d9958",
-            "v2/ThreadReadResponse.json": "dd1f9df782fc0e0a9d752dbf6f725634355b4889f9393074c9a71f768dcb2990",
-            "v2/ThreadResumeResponse.json": "a729b3d290402b1e7ee11661001dc194b59f0b5743cbe9e64cd6720862179865",
-            "v2/TurnStartResponse.json": "099184dc9d6195cd965b8a90ee5d1cb05c87d9b329acecdfbd63f358e660d568",
+            "v2/ThreadListParams.json": "b227bb78acf9b91060d03c56d3f2072cdd9f1bd08290c11e8869f1a663b16da2",
+            "v2/ThreadListResponse.json": "d12dce8505f06cb53404bdac3cbfffbb64f8808ff48556f7d09996f2198e0719",
+            "v2/ThreadReadResponse.json": "96017b5053c54ccddd8f8a1d8a07fb850e88bd761ad9e17fc9cb0b82a6870fe8",
+            "v2/ThreadResumeResponse.json": "32fc20f4853f89bcee82dba6065751e0b08c104cf6a5c51f9c1aa658d1ce9154",
+            "v2/TurnStartResponse.json": "1203962cc16ebf6e1474935a979e07bb054afb9b47060cafb5f4674e56a589d2",
             "v2/ThreadStatusChangedNotification.json": (
-                "146af6d3702c4f3c844bd10b6b6b3e2b872e958a8d7d822157c19aaa6dc085f6"
+                "26f3c60c1b73f7fa2d31c74429cdc36f8746c76c33e3d314b3fb61d3661f05f6"
             ),
-            "v1/InitializeParams.json": "4f576f99e285beb28f71f48a72b887c1f517dada86fee348fe2af0a35511de23",
-            "v1/InitializeResponse.json": "86dcd236d0576a82c85b933586dc45731260eab1b6edb3447b03f790277322b1",
-            "v2/ThreadReadParams.json": "db97080f82facc3259dbb9404e9f0df81e360619f4cd73983a9d99d25f5089ee",
-            "v2/ThreadResumeParams.json": "1dc47d294d0de32f334e0829893d743ec64393ebcf00d7212c9c55b03c34ed23",
-            "v2/TurnStartParams.json": "48a0ee95b669b47f5557c68b99a4d459b50577ccce8ebc5976532f50e3c6d059",
-            "v2/TurnStartedNotification.json": "e268134e79cae246e39f110e67bd2efbb49ce9a572520a85a96a7325eaf31e03",
-            "v2/TurnCompletedNotification.json": "5b5f2ca515658ea6fcce7e961d1c3feddb3f48c0dcc813260c7ccf77a2d016af",
-            "v2/ErrorNotification.json": "1ec871b02771300a26a34e41a7cfaf7484330a8c37c197d1ac133e753b083a09",
+            "v1/InitializeParams.json": "6f0094be9a65242ec779a40794cbd4fdfa32fca1e45084a16adfb50501d33ea2",
+            "v1/InitializeResponse.json": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9",
+            "v2/ThreadReadParams.json": "7222da641029c071811f6bcb651de347fe037e6689db22b3fad0c5b17b7f1c21",
+            "v2/ThreadResumeParams.json": "7d9ff4b7d83702448715ada355a9713af6f71beaf6fcfcb08c4f03ac52842813",
+            "v2/TurnStartParams.json": "ff2e7e0796fbe2ad99e5ec7d489cc8c8630b75f2ab8f17857711107587e3197d",
+            "v2/TurnStartedNotification.json": "4630c58b3c9096203379bfc5bf84378a591ee44dd30b5f816ce171cb99ac8261",
+            "v2/TurnCompletedNotification.json": "237d7f5ded4a245473634422f5f7c3170b99dd19d413fec0d515077ff577fd29",
+            "v2/ErrorNotification.json": "eb2c1291cd21ca2c1fca72fc7ee647f8809fa0cb04620a981a9e5ce3fee35cbd",
         }
     ),
 )
@@ -197,6 +203,11 @@ def _strict_object(raw: bytes, *, label: str, max_bytes: int = _MAX_LINE_BYTES) 
 
 def _schema_profile_sha256() -> str:
     return _sha(_canonical(dict(PROTOCOL_PROFILE.schema_sha256)))
+
+
+def _verify_schema_hashes(actual: Mapping[str, str]) -> None:
+    if dict(actual) != dict(PROTOCOL_PROFILE.schema_sha256):
+        raise DeliveryError("installed Codex schema bundle does not match the pinned 0.149 profile")
 
 
 @dataclass(slots=True)
@@ -278,7 +289,13 @@ def _executable_boundary() -> tuple[type[object], Callable[[Path], object], Call
                 raise DeliveryError("Codex executable authority must not traverse symlinks")
             if component != path and (not stat.S_ISDIR(info.st_mode) or info.st_uid not in {0, os.getuid()}):
                 raise DeliveryError("Codex executable parent authority is invalid")
-            if component != path and info.st_mode & 0o022:
+            canonical_applications = (
+                component == Path("/Applications")
+                and info.st_uid == 0
+                and bool(info.st_mode & 0o020)
+                and not bool(info.st_mode & 0o002)
+            )
+            if component != path and info.st_mode & 0o022 and not canonical_applications:
                 raise DeliveryError("Codex executable parent is writable by another principal")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -336,6 +353,77 @@ def _minimal_environment(source: Mapping[str, str] | None = None) -> dict[str, s
     environment = {key: inherited[key] for key in allowed if inherited.get(key)}
     environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
     return environment
+
+
+@dataclass(frozen=True, slots=True)
+class _DesktopIdentity:
+    cli_version: str
+    authority: str
+    team_id: str
+    app_version: str
+    app_build: str
+
+
+def _inspect_desktop_identity() -> _DesktopIdentity:
+    try:
+        version = subprocess.run(
+            [str(_CODEX_EXECUTABLE), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_minimal_environment(),
+        ).stdout.strip()
+        signature = subprocess.run(
+            ["/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_minimal_environment(),
+        ).stderr
+        with Path("/Applications/Codex.app/Contents/Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+    except (OSError, subprocess.SubprocessError, plistlib.InvalidFileException, ValueError) as exc:
+        raise DeliveryError("cannot establish installed Codex Desktop identity") from exc
+    authority = next(
+        (line.removeprefix("Authority=") for line in signature.splitlines() if line.startswith("Authority=")),
+        "",
+    )
+    team_id = next(
+        (line.removeprefix("TeamIdentifier=") for line in signature.splitlines() if line.startswith("TeamIdentifier=")),
+        "",
+    )
+    return _DesktopIdentity(
+        cli_version=version,
+        authority=authority,
+        team_id=team_id,
+        app_version=str(info.get("CFBundleShortVersionString", "")),
+        app_build=str(info.get("CFBundleVersion", "")),
+    )
+
+
+def _require_production_identity(authority: object) -> _DesktopIdentity:
+    record = _validate_executable(authority)
+    if record.sha256 != _EXPECTED_CODEX_SHA256:
+        raise DeliveryError("installed Codex executable hash does not match the pinned production identity")
+    identity = _inspect_desktop_identity()
+    expected = _DesktopIdentity(
+        cli_version=_EXPECTED_USER_AGENT,
+        authority=_EXPECTED_CODEX_AUTHORITY,
+        team_id=_EXPECTED_CODEX_TEAM_ID,
+        app_version=_EXPECTED_CODEX_APP_VERSION,
+        app_build=_EXPECTED_CODEX_APP_BUILD,
+    )
+    if identity != expected:
+        raise DeliveryError("installed Codex Desktop identity does not match the pinned production identity")
+    return identity
+
+
+def _seal_production_executable() -> object:
+    authority = _seal_executable(_CODEX_EXECUTABLE)
+    _require_production_identity(authority)
+    return authority
 
 
 def preflight_qualification_result(data: Mapping[str, object]) -> ExecutionResult:
@@ -438,6 +526,16 @@ class DeliveryPreview:
         )
 
 
+def _require_interactive_tty(input_stream: TextIO, output_stream: TextIO) -> None:
+    try:
+        input_tty = input_stream.isatty()
+        output_tty = output_stream.isatty()
+    except (AttributeError, OSError) as exc:
+        raise DeliveryError("confirmation requires terminal streams") from exc
+    if not input_tty or not output_tty:
+        raise DeliveryError("confirmation requires an interactive TTY")
+
+
 def _confirmation_boundary() -> tuple[object, object]:
     token = object()
     records: WeakKeyDictionary[object, tuple[str, str, float, list[bool], threading.Lock]] = WeakKeyDictionary()
@@ -470,13 +568,7 @@ def _confirmation_boundary() -> tuple[object, object]:
     ) -> object:
         if type(preview) is not DeliveryPreview or type(ttl_seconds) is not int or not (1 <= ttl_seconds <= 300):
             raise DeliveryError("confirmation arguments violate the closed contract")
-        try:
-            input_tty = input_stream.isatty()
-            output_tty = output_stream.isatty()
-        except (AttributeError, OSError) as exc:
-            raise DeliveryError("confirmation requires terminal streams") from exc
-        if not input_tty or not output_tty:
-            raise DeliveryError("confirmation requires an interactive TTY")
+        _require_interactive_tty(input_stream, output_stream)
         challenge = secrets.token_hex(8).upper()
         output_stream.write(preview.render())
         output_stream.write(f"\nconfirmation-challenge: {challenge}\nre-enter challenge exactly: ")
@@ -883,6 +975,7 @@ class _JsonlSession:
             "id",
             "modelProvider",
             "preview",
+            "projectId",
             "sessionId",
             "source",
             "status",
@@ -895,11 +988,12 @@ class _JsonlSession:
             "threadSource",
             "forkedFromId",
             "gitInfo",
-            "isPinned",
             "name",
             "parentThreadId",
             "path",
             "recencyAt",
+            "section",
+            "sectionEnteredAt",
         }
         if not required.issubset(thread) or not set(thread).issubset(allowed):
             raise DeliveryError("thread violates the selected field set")
@@ -935,13 +1029,38 @@ class _JsonlSession:
             "parentThreadId",
             "path",
             "threadSource",
+            "projectId",
         )
         if any(key in thread and thread[key] is not None and type(thread[key]) is not str for key in nullable_strings):
             raise DeliveryError("thread optional string violates the selected schema")
-        if "isPinned" in thread and type(thread["isPinned"]) is not bool:
-            raise DeliveryError("thread pinned flag violates the selected schema")
         if "recencyAt" in thread and thread["recencyAt"] is not None and type(thread["recencyAt"]) is not int:
             raise DeliveryError("thread recency violates the selected schema")
+        if (
+            "sectionEnteredAt" in thread
+            and thread["sectionEnteredAt"] is not None
+            and type(thread["sectionEnteredAt"]) is not int
+        ):
+            raise DeliveryError("thread section entry time violates the selected schema")
+        if "section" in thread:
+            section = thread["section"]
+            if type(section) is not dict:
+                raise DeliveryError("thread section violates the selected schema")
+            selected_section = cast(dict[object, object], section)
+            if not {"id", "name"}.issubset(selected_section) or not set(selected_section).issubset(
+                {"id", "name", "appearance"}
+            ):
+                raise DeliveryError("thread section violates the selected field set")
+            if type(selected_section["id"]) is not str or type(selected_section["name"]) is not str:
+                raise DeliveryError("thread section identity violates the selected schema")
+            if "appearance" in selected_section:
+                appearance = selected_section["appearance"]
+                if type(appearance) is not dict:
+                    raise DeliveryError("thread section appearance violates the selected schema")
+                selected_appearance = cast(dict[object, object], appearance)
+                if not set(selected_appearance).issubset({"color", "icon"}) or any(
+                    value is not None and type(value) is not str for value in selected_appearance.values()
+                ):
+                    raise DeliveryError("thread section appearance violates the selected schema")
         if "gitInfo" in thread and thread["gitInfo"] is not None and type(thread["gitInfo"]) is not dict:
             raise DeliveryError("thread git information violates the selected schema")
         if thread["source"] != route.source_kind or thread["cwd"] != route.cwd:
@@ -1489,8 +1608,9 @@ def deliver_foreground(
     """Perform one foreground, human-confirmed delivery through fixed local stdio."""
     message = _read_owned_regular(message_path, max_bytes=_MAX_MESSAGE_BYTES)
     preview = DeliveryPreview(target_alias=target_alias, message=message)
+    _require_interactive_tty(input_stream, output_stream)
+    executable_authority = _seal_production_executable()
     capability = confirm_preview(preview, input_stream=input_stream, output_stream=output_stream)
-    executable_authority = _seal_executable(_CODEX_EXECUTABLE)
     outcome, _session = _perform(
         preview=preview,
         capability=capability,
@@ -1503,13 +1623,14 @@ def deliver_foreground(
 
 def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
     thread = {
-        "cliVersion": "0.146.0",
+        "cliVersion": "0.149.0-alpha.4.3",
         "createdAt": 1,
         "cwd": "/synthetic/workspace",
         "ephemeral": False,
         "id": thread_id,
         "modelProvider": "openai",
         "preview": "synthetic",
+        "projectId": None,
         "sessionId": "synthetic-session",
         "source": "appServer",
         "status": {"type": "idle"},

@@ -29,6 +29,16 @@ def test_only_fixed_subprocess_launch_exists() -> None:
     assert isinstance(keywords["env"], ast.Call)
 
 
+def test_identity_probes_are_fixed_and_pinned() -> None:
+    source = Path(inspect.getfile(subject)).read_text(encoding="utf-8")
+    assert '[str(_CODEX_EXECUTABLE), "--version"]' in source
+    assert '["/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE)]' in source
+    assert subject._EXPECTED_CODEX_TEAM_ID == "2DC432GLL2"
+    assert subject._EXPECTED_CODEX_SHA256 == ("dd304ffe232fa9e782ed3e5358776d270e394c2fb85cab846f989823f0843313")
+    assert 'component == Path("/Applications")' in source
+    assert "not bool(info.st_mode & 0o002)" in source
+
+
 def test_no_network_browser_or_automatic_delivery_surface() -> None:
     source = Path(inspect.getfile(subject)).read_text(encoding="utf-8")
     tree = ast.parse(source)
