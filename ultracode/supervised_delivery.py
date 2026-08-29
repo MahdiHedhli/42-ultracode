@@ -1021,11 +1021,15 @@ class _JsonlSession:
             raise DeliveryError("thread status violates the stable schema")
         status = cast(dict[object, object], value)
         kind = status.get("type")
+        if type(kind) is not str:
+            raise DeliveryError("thread status violates the stable schema")
         if kind in {"notLoaded", "idle", "systemError"} and set(status) == {"type"}:
             return kind
         if kind == "active" and set(status) == {"activeFlags", "type"}:
             flags = status.get("activeFlags")
-            if type(flags) is list and all(flag in {"waitingOnApproval", "waitingOnUserInput"} for flag in flags):
+            if type(flags) is list and all(
+                type(flag) is str and flag in {"waitingOnApproval", "waitingOnUserInput"} for flag in flags
+            ):
                 return "active"
         raise DeliveryError("thread status violates the stable schema")
 

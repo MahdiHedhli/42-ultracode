@@ -1199,7 +1199,9 @@ def test_status_change_race_fails_on_the_correct_side_of_attempt(
     assert outcome is expected
 
 
-@pytest.mark.parametrize("mutation", ["system_error", "wrong_target", "malformed"])
+@pytest.mark.parametrize(
+    "mutation", ["system_error", "wrong_target", "malformed", "unhashable_type", "unhashable_flag"]
+)
 def test_post_write_ambiguous_status_notifications_are_terminal_uncertain(tmp_path: Path, mutation: str) -> None:
     lines = delivery._fake_transcript().splitlines()
     params: dict[str, object] = {"status": {"activeFlags": [], "type": "active"}, "threadId": "synthetic-thread"}
@@ -1207,11 +1209,29 @@ def test_post_write_ambiguous_status_notifications_are_terminal_uncertain(tmp_pa
         params["status"] = {"type": "systemError"}
     elif mutation == "wrong_target":
         params["threadId"] = "other-thread"
+    elif mutation == "unhashable_type":
+        params["status"] = {"type": []}
+    elif mutation == "unhashable_flag":
+        params["status"] = {"activeFlags": [[]], "type": "active"}
     else:
         params["status"] = {"type": "active", "unexpected": True}
     lines.insert(7, delivery._canonical({"jsonrpc": "2.0", "method": "thread/status/changed", "params": params}))
     outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
     assert outcome is DeliveryOutcome.UNCERTAIN
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"type": []},
+        {"type": {}},
+        {"activeFlags": [[]], "type": "active"},
+        {"activeFlags": [{}], "type": "active"},
+    ],
+)
+def test_thread_status_unhashable_type_drift_is_categorical(status: object) -> None:
+    with pytest.raises(delivery.DeliveryError, match="thread status violates the stable schema"):
+        delivery._JsonlSession._status_value(status)
 
 
 def test_preview_escapes_terminal_control_sequences() -> None:
