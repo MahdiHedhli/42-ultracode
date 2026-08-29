@@ -50,6 +50,7 @@ _MAX_JSON_NODES = 8192
 _MAX_STDERR_BYTES = 64 * 1024
 _DEFAULT_SESSION_SECONDS = 60.0
 _DEFAULT_OPERATION_SECONDS = 5.0
+_CLEANUP_TAIL_SECONDS = 0.5
 _CLEANUP_SECONDS = 3.0
 _SYMBOL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 _EXPECTED_USER_AGENT = "codex-cli 0.146.0"
@@ -736,6 +737,7 @@ class _JsonlSession:
         self._counters = counters or _OperationCounters()
         self._next_id = 1
         self._turn_start_count = 0
+        self._turn_request_written = False
         self._deadline = deadline or _Deadline.start()
         self._health_check = health_check or (lambda: None)
         self._read_buffer = bytearray()
@@ -816,6 +818,8 @@ class _JsonlSession:
                 self._counters.real_turns += 1
                 self._counters.real_posts += 1
         self._write({"id": request_id, "jsonrpc": "2.0", "method": method, "params": dict(params)})
+        if method == "turn/start":
+            self._turn_request_written = True
         response = self._read()
         while response.get("method") == "thread/status/changed":
             self._accept_status_notification(response)
@@ -861,6 +865,8 @@ class _JsonlSession:
         if set(params) != {"status", "threadId"} or params.get("threadId") != self._target_thread_id:
             raise DeliveryError("status notification target mismatch")
         self._status = self._status_value(params.get("status"))
+        if self._status == "active" and self._turn_request_written:
+            return
         if self._status not in {"notLoaded", "idle"}:
             raise DeliveryError("target thread became ineligible")
 
@@ -1261,10 +1267,16 @@ class _CodexProcess:
     def _wait_group_absent(self, end: float) -> tuple[bool, set[str]]:
         issues: set[str] = set()
         while True:
+            if self._process is not None:
+                try:
+                    self._process.poll()
+                except OSError:
+                    issues.add("process_poll_failed")
             alive, issue = self._group_alive()
             if issue is not None:
                 issues.add(issue)
             if not alive:
+                issues.discard("process_group_probe_failed")
                 return True, issues
             if time.monotonic() >= end:
                 return False, issues
@@ -1274,6 +1286,7 @@ class _CodexProcess:
         if self._process is None:
             return
         cleanup_end = time.monotonic() + _CLEANUP_SECONDS
+        group_cleanup_end = max(time.monotonic(), cleanup_end - _CLEANUP_TAIL_SECONDS)
         issues: set[str] = set()
 
         def remaining() -> float:
@@ -1318,7 +1331,7 @@ class _CodexProcess:
                 if issue is not None:
                     issues.add(issue)
                 self.cleanup_actions.append("term_wait")
-                absent, group_issues = self._wait_group_absent(min(cleanup_end, time.monotonic() + 1.0))
+                absent, group_issues = self._wait_group_absent(min(group_cleanup_end, time.monotonic() + 1.0))
                 issues.update(group_issues)
                 if not absent:
                     self.cleanup_actions.append("kill_group")
@@ -1326,7 +1339,7 @@ class _CodexProcess:
                     if issue is not None:
                         issues.add(issue)
                     self.cleanup_actions.append("kill_wait")
-                    absent, group_issues = self._wait_group_absent(cleanup_end)
+                    absent, group_issues = self._wait_group_absent(group_cleanup_end)
                     issues.update(group_issues)
                     if not absent:
                         issues.add("process_group_still_alive")

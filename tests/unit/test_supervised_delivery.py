@@ -256,6 +256,17 @@ def test_schema_and_lifecycle_mutations_fail_before_write(tmp_path: Path) -> Non
         assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
 
 
+def test_target_absent_from_active_listing_fails_before_write(tmp_path: Path) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    active = json.loads(lines[1])
+    active["result"]["data"] = []
+    active["result"]["nextCursor"] = None
+    del lines[2]
+    lines[1] = delivery._canonical(active)
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+
+
 def test_silent_and_partial_pipe_reads_obey_deadline(tmp_path: Path) -> None:
     preview = DeliveryPreview("SYNTHETIC_TARGET", b"payload")
     for index, partial in enumerate((b"", b'{"jsonrpc":"2.0"')):
@@ -440,6 +451,12 @@ class _FakeProcess:
         self.alive = False
         return 0
 
+    def terminate(self) -> None:
+        self.alive = False
+
+    def kill(self) -> None:
+        self.alive = False
+
 
 class _FakeStderr:
     def __init__(self, issue: str | None = None, *, alive: bool = False) -> None:
@@ -467,6 +484,7 @@ def _cleanup_fake(
     probe_failures: int = 0,
     poll_error: bool = False,
     wait_error: bool = False,
+    owned_group: bool = True,
 ) -> tuple[delivery._CodexProcess, _FakeProcess, list[signal.Signals], _FakeStderr]:
     fake = _FakeProcess(
         waits,
@@ -496,7 +514,7 @@ def _cleanup_fake(
     expired = delivery._Deadline(time.monotonic() - 10, 0.01)
     owner = delivery._CodexProcess(object(), expired)
     owner._process = fake  # type: ignore[assignment]
-    owner._process_group_id = fake.pid
+    owner._process_group_id = fake.pid if owned_group else None
     owner._stderr = helper  # type: ignore[assignment]
     owner.__exit__(None, None, None)
     return owner, fake, signals, helper
@@ -614,6 +632,88 @@ def test_cleanup_poll_and_wait_errors_are_categorical(monkeypatch) -> None:  # t
     assert helper.joined
 
 
+def test_cleanup_missing_group_identity_uses_direct_child_fallback(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    owner, fake, signals, helper = _cleanup_fake(
+        monkeypatch,
+        waits=["success"],
+        term_stops=False,
+        kill_stops=False,
+        owned_group=False,
+    )
+    assert signals == []
+    assert not fake.alive and helper.joined
+    assert owner.cleanup_issue == "process_group_identity_missing"
+    assert "terminate_unverified_child" in owner.cleanup_actions
+
+
+def _real_owned_cleanup(
+    command: list[str], *, wait_for_ready: bool = False
+) -> tuple[delivery._CodexProcess, subprocess.Popen[bytes], float]:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        close_fds=True,
+        start_new_session=True,
+    )
+    if wait_for_ready:
+        assert process.stdout is not None
+        readable, _, _ = select.select([process.stdout], [], [], 2)
+        assert readable and process.stdout.readline() == b"ready\n"
+    owner = delivery._CodexProcess(object(), delivery._Deadline(time.monotonic() - 1, 0.01))
+    owner._process = process
+    owner._process_group_id = process.pid
+    assert process.stderr is not None
+    owner._stderr = delivery._StderrScanner(
+        process.stderr, delivery._Deadline.start(session_seconds=5, operation_seconds=1)
+    )
+    owner._stderr.start()
+    started = time.monotonic()
+    owner.__exit__(None, None, None)
+    return owner, process, time.monotonic() - started
+
+
+def test_real_darwin_child_is_reaped_before_group_absence() -> None:
+    baseline = delivery._stderr_thread_census()
+    owner, process, elapsed = _real_owned_cleanup(["/bin/sh", "-c", "sleep 30"])
+    assert owner.cleanup_issue is None
+    assert process.returncode == -signal.SIGTERM
+    assert elapsed < delivery._CLEANUP_SECONDS
+    assert delivery._stderr_thread_census() == baseline
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process.pid, 0)
+
+
+def test_real_darwin_descendant_survives_term_then_is_killed_and_reaped() -> None:
+    program = (
+        "import os,signal,time\n"
+        "read_fd,write_fd=os.pipe()\n"
+        "child=os.fork()\n"
+        "if child == 0:\n"
+        " os.close(read_fd)\n"
+        " signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        " os.write(write_fd,b'1')\n"
+        " os.close(write_fd)\n"
+        " time.sleep(30)\n"
+        "else:\n"
+        " os.close(write_fd)\n"
+        " os.read(read_fd,1)\n"
+        " os.close(read_fd)\n"
+        " print('ready',flush=True)\n"
+        " time.sleep(30)\n"
+    )
+    baseline = delivery._stderr_thread_census()
+    owner, process, elapsed = _real_owned_cleanup(["/usr/bin/python3", "-c", program], wait_for_ready=True)
+    assert owner.cleanup_issue is None
+    assert process.returncode == -signal.SIGTERM
+    assert "kill_group" in owner.cleanup_actions
+    assert elapsed < delivery._CLEANUP_SECONDS
+    assert delivery._stderr_thread_census() == baseline
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process.pid, 0)
+
+
 def test_cleanup_failure_downgrades_apparent_delivery_to_terminal_uncertain(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     writer = io.BytesIO()
 
@@ -669,7 +769,7 @@ def test_execution_result_preflight_uses_production_vocabulary() -> None:
         delivery.preflight_qualification_result(invalid)
 
 
-def test_pinned_sequence26_schema_hashes_are_exact() -> None:
+def test_pinned_sequence26_schema_digest_literals_are_change_detector_pins() -> None:
     expected = {
         "v2/ThreadListParams.json": "3b37cf361c29b959cf29828db3017c0a5e38d9c24de5fbd089bd44d42f05d5f0",
         "v2/ThreadListResponse.json": "5b01b0c03141c2a15559879294ef065daac9715615d7df65371baf5f119d9958",
@@ -683,7 +783,11 @@ def test_pinned_sequence26_schema_hashes_are_exact() -> None:
 
 @pytest.mark.parametrize(
     ("insert_at", "expected"),
-    [(6, DeliveryOutcome.FAILED_BEFORE_WRITE), (7, DeliveryOutcome.UNCERTAIN)],
+    [
+        (6, DeliveryOutcome.FAILED_BEFORE_WRITE),
+        (7, DeliveryOutcome.DELIVERED),
+        (8, DeliveryOutcome.DELIVERED),
+    ],
 )
 def test_status_change_race_fails_on_the_correct_side_of_attempt(
     tmp_path: Path, insert_at: int, expected: DeliveryOutcome
@@ -699,6 +803,21 @@ def test_status_change_race_fails_on_the_correct_side_of_attempt(
     lines.insert(insert_at, notification)
     outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
     assert outcome is expected
+
+
+@pytest.mark.parametrize("mutation", ["system_error", "wrong_target", "malformed"])
+def test_post_write_ambiguous_status_notifications_are_terminal_uncertain(tmp_path: Path, mutation: str) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    params: dict[str, object] = {"status": {"activeFlags": [], "type": "active"}, "threadId": "synthetic-thread"}
+    if mutation == "system_error":
+        params["status"] = {"type": "systemError"}
+    elif mutation == "wrong_target":
+        params["threadId"] = "other-thread"
+    else:
+        params["status"] = {"type": "active", "unexpected": True}
+    lines.insert(7, delivery._canonical({"jsonrpc": "2.0", "method": "thread/status/changed", "params": params}))
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.UNCERTAIN
 
 
 def test_preview_escapes_terminal_control_sequences() -> None:

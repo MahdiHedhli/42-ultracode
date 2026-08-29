@@ -86,6 +86,24 @@ def test_stderr_scanner_is_bounded_private_and_categorical() -> None:
     reader.close()
 
 
+def test_stderr_scanner_rejects_more_than_64_kib_without_persisting_bytes() -> None:
+    os = __import__("os")
+    pytest = __import__("pytest")
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "rb", buffering=0)
+    scanner = subject._StderrScanner(reader, subject._Deadline.start(session_seconds=2, operation_seconds=1))
+    scanner.start()
+    for _ in range(17):
+        os.write(write_fd, b"x" * 4096)
+    os.close(write_fd)
+    scanner._thread.join(timeout=1)
+    with pytest.raises(subject.DeliveryError) as captured:
+        scanner.check()
+    assert str(captured.value) == "app-server stderr rejected: stderr_limit_exceeded"
+    assert "x" * 32 not in str(captured.value)
+    reader.close()
+
+
 def test_process_cleanup_uses_owned_group_and_bounded_wait() -> None:
     source = Path(inspect.getfile(subject)).read_text(encoding="utf-8")
     assert "os.killpg" in source
