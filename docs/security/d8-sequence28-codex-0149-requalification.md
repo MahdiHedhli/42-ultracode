@@ -41,8 +41,10 @@ trees and requires the reviewed changed-path set. The sanitized result is
 The version and code-signature display probes are exact allowlisted commands.
 Each launches in a new process group with closed descriptors, bounded output,
 and bounded wait. An exceptional or timed-out probe kills its owned group and
-reaps the direct child before failing closed. Probe output is parsed in memory
-and is not persisted.
+reaps the direct child before failing closed. If group signaling itself fails,
+the fallback kills and reaps the direct child, reports group containment as
+failed, and authorizes no delivery. Probe output is parsed in memory and is not
+persisted.
 
 ## Scope
 

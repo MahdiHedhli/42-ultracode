@@ -373,6 +373,7 @@ def _run_fixed_identity_probe(argv: tuple[str, ...]) -> tuple[bytes, bytes]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=_minimal_environment(),
+            shell=False,
             close_fds=True,
             start_new_session=True,
         )
@@ -381,16 +382,27 @@ def _run_fixed_identity_probe(argv: tuple[str, ...]) -> tuple[bytes, bytes]:
     try:
         stdout, stderr = process.communicate(timeout=10)
     except BaseException as exc:
+        group_issue: OSError | None = None
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         except OSError as cleanup_exc:
-            raise DeliveryError("identity probe process group could not be contained") from cleanup_exc
+            group_issue = cleanup_exc
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            except OSError:
+                pass
         try:
             stdout, stderr = process.communicate(timeout=3)
         except (OSError, subprocess.SubprocessError) as cleanup_exc:
             raise DeliveryError("identity probe process could not be reaped") from cleanup_exc
+        if group_issue is not None:
+            raise DeliveryError(
+                "identity probe process group could not be contained; direct child reaped"
+            ) from group_issue
         raise DeliveryError("installed Codex Desktop identity probe did not complete") from exc
     if process.returncode != 0:
         raise DeliveryError("installed Codex Desktop identity probe failed")
@@ -1042,12 +1054,19 @@ class _JsonlSession:
             raise DeliveryError("turn violates the selected field set")
         if type(turn["id"]) is not str or type(turn["items"]) is not list:
             raise DeliveryError("turn identity or items violate the selected schema")
-        if turn["status"] not in {"completed", "interrupted", "failed", "inProgress"}:
+        if type(turn["status"]) is not str or turn["status"] not in {
+            "completed",
+            "interrupted",
+            "failed",
+            "inProgress",
+        }:
             raise DeliveryError("turn status violates the selected schema")
         for field in ("completedAt", "durationMs", "startedAt"):
             if field in turn and turn[field] is not None and type(turn[field]) is not int:
                 raise DeliveryError("turn timing violates the selected schema")
-        if "itemsView" in turn and turn["itemsView"] not in {"notLoaded", "summary", "full"}:
+        if "itemsView" in turn and (
+            type(turn["itemsView"]) is not str or turn["itemsView"] not in {"notLoaded", "summary", "full"}
+        ):
             raise DeliveryError("turn items view violates the selected schema")
         if "error" in turn and turn["error"] is not None and type(turn["error"]) is not dict:
             raise DeliveryError("turn error violates the selected schema")
@@ -1266,6 +1285,18 @@ class _JsonlSession:
         self._exact_target(self._request("thread/resume", {"threadId": route.thread_id}), route, resume=True)
         self._exact_target(self._request("thread/read", {"includeTurns": False, "threadId": route.thread_id}), route)
 
+    @staticmethod
+    def _reject_error_notification(values: Mapping[object, object], thread_id: str, turn_id: str) -> NoReturn:
+        if (
+            set(values) != {"error", "threadId", "turnId", "willRetry"}
+            or values.get("threadId") != thread_id
+            or values.get("turnId") != turn_id
+            or type(values.get("willRetry")) is not bool
+            or type(values.get("error")) is not dict
+        ):
+            raise DeliveryError("error notification violates the selected schema")
+        raise DeliveryError("app-server reported a turn error")
+
     def start_and_wait(self, thread_id: str, message: bytes) -> str:
         text = message.decode("utf-8")
         started = self._request("turn/start", {"input": [{"text": text, "type": "text"}], "threadId": thread_id})
@@ -1294,15 +1325,7 @@ class _JsonlSession:
                 self._accept_status_notification(message_obj)
                 continue
             if method == "error":
-                if (
-                    set(values) != {"error", "threadId", "turnId", "willRetry"}
-                    or values.get("threadId") != thread_id
-                    or values.get("turnId") != turn_id
-                    or type(values.get("willRetry")) is not bool
-                    or type(values.get("error")) is not dict
-                ):
-                    raise DeliveryError("error notification violates the selected schema")
-                raise DeliveryError("app-server reported a turn error")
+                self._reject_error_notification(values, thread_id, turn_id)
             if set(values) != {"threadId", "turn"}:
                 raise DeliveryError("server notification params violate the selected schema")
             if values.get("threadId") != thread_id:

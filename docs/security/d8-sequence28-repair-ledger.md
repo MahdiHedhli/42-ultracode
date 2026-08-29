@@ -72,14 +72,31 @@ Repair:
 - retain the installed-app identity check as an explicit host qualification
   outside portable unit tests.
 
+## Review repair loop 5
+
+Grok rejected the repaired candidate because an identity-probe group-signal
+`OSError` raised before direct-child reap, and because the newly recognized
+error-notification envelope lacked dedicated falsifiers.
+
+Repair:
+
+- on group-signal failure, kill and reap the direct child before reporting the
+  unresolved group-containment failure;
+- test the exact fallback ordering;
+- centralize and test the exact error-notification envelope;
+- prove both `willRetry` values still fail without a retry;
+- reject missing, extra, renamed, widened, and wrong-identity error fields; and
+- reject unhashable turn status/items-view type drift categorically.
+
 ## Qualification
 
 - Raw schemas: 14/14 exact.
 - Focused delivery/security tests: 97 passed before the final ordering
   regression.
 - Official format, lint, and strict typing gates: passed.
-- Complete review-repair exact-worktree tests: 559 passed.
-- Focused fake-peer, identity-probe, and Darwin cleanup run: 21 passed.
+- Complete review-repair exact-worktree tests: 568 passed.
+- Focused fake-peer, identity-probe, error-notification, and Darwin cleanup run:
+  30 passed.
 - Owned Codex app-server descendants after no-live qualification: zero.
 - Sanitized candidate privacy scan: passed.
 - Unrelated-project access: none.

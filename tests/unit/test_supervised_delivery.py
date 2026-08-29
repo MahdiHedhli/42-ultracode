@@ -958,6 +958,45 @@ def test_fixed_identity_probe_timeout_kills_group_and_reaps(monkeypatch: pytest.
     ]
 
 
+def test_fixed_identity_probe_group_signal_failure_still_reaps_direct_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    class Process:
+        pid = 789
+        returncode = None
+        attempts = 0
+
+        def communicate(self, *, timeout: int) -> tuple[bytes, bytes]:
+            self.attempts += 1
+            calls.append(("communicate", timeout))
+            if self.attempts == 1:
+                raise subprocess.TimeoutExpired("probe", timeout)
+            self.returncode = -signal.SIGKILL
+            return b"", b""
+
+        def kill(self) -> None:
+            calls.append(("kill", self.pid))
+
+    process = Process()
+    monkeypatch.setattr(delivery.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    def denied(pid: int, sig: signal.Signals) -> None:
+        calls.append(("killpg", pid, sig))
+        raise PermissionError("synthetic group signal denial")
+
+    monkeypatch.setattr(delivery.os, "killpg", denied)
+    with pytest.raises(DeliveryError, match="direct child reaped"):
+        delivery._run_fixed_identity_probe((str(delivery._CODEX_EXECUTABLE), "--version"))
+    assert calls == [
+        ("communicate", 10),
+        ("killpg", 789, signal.SIGKILL),
+        ("kill", 789),
+        ("communicate", 3),
+    ]
+
+
 def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     authority = object()
     record = delivery._ExecutableRecord(
@@ -1095,6 +1134,45 @@ def test_thread_rejects_consumed_field_removal_rename_widening_or_ambiguity(muta
         thread["section"] = {"id": "section-1", "name": "Main", "unexpected": True}
     with pytest.raises(DeliveryError):
         delivery._JsonlSession._thread(thread, route)
+
+
+@pytest.mark.parametrize("will_retry", [False, True])
+def test_error_notification_exact_shape_always_fails_without_retry(will_retry: bool) -> None:
+    values = {
+        "error": {"message": "synthetic"},
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "willRetry": will_retry,
+    }
+    with pytest.raises(DeliveryError, match="app-server reported a turn error"):
+        delivery._JsonlSession._reject_error_notification(values, "thread-1", "turn-1")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing", "extra", "renamed", "widened", "wrong_thread", "wrong_turn"],
+)
+def test_error_notification_rejects_shape_or_identity_drift(mutation: str) -> None:
+    values: dict[str, object] = {
+        "error": {"message": "synthetic"},
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "willRetry": False,
+    }
+    if mutation == "missing":
+        del values["error"]
+    elif mutation == "extra":
+        values["extra"] = True
+    elif mutation == "renamed":
+        values["turn_id"] = values.pop("turnId")
+    elif mutation == "widened":
+        values["willRetry"] = "false"
+    elif mutation == "wrong_thread":
+        values["threadId"] = "thread-2"
+    else:
+        values["turnId"] = "turn-2"
+    with pytest.raises(DeliveryError, match="selected schema"):
+        delivery._JsonlSession._reject_error_notification(values, "thread-1", "turn-1")
 
 
 @pytest.mark.parametrize(
