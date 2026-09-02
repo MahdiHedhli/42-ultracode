@@ -177,6 +177,11 @@ It records a two-turn harness run and a two-turn read-only Codex CLI adapter
 run. Both reached `COMPLETE`; the adapter record explicitly retains the planner
 and worker launches that were still manual Level C actions.
 
+The 2026-09-02 live worker-MCP acceptance record is at
+[`docs/dogfood/2026-09-02-live-mcp-acceptance.json`](dogfood/2026-09-02-live-mcp-acceptance.json).
+It confirms two fresh Codex CLI workers used the real role-scoped MCP endpoint;
+its planner and control clients were local MCP drivers, not ChatGPT desktop.
+
 The sanitized Sequence 9 D5R1 policy-registration recovery record is at
 [docs/dogfood/2026-08-27-d5r1-policy-registration-recovery-evidence.json](dogfood/2026-08-27-d5r1-policy-registration-recovery-evidence.json).
 It records registry qualification only; D5R1, repack, checkpoint access, and

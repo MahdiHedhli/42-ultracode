@@ -1,0 +1,77 @@
+{
+  "recorded_on": "2026-09-02",
+  "scenario": "live role-scoped MCP worker acceptance",
+  "run_id": "5a648226-2833-4ea9-876c-467cee1159b3",
+  "automation_level": "C",
+  "manual_prompt_copy_count": 0,
+  "interfaces": {
+    "planner": "separate local stdio planner MCP client; not ChatGPT desktop",
+    "worker": "two fresh subscription-authenticated Codex CLI sessions",
+    "control": "separate local stdio control MCP client"
+  },
+  "subscription": {
+    "codex_cli_version": "0.152.1",
+    "authentication": "codex login status reported ChatGPT",
+    "model": "gpt-5.5",
+    "api_key_supplied_to_acceptance_command": false
+  },
+  "shared_state": {
+    "database": "ignored local .ultracode acceptance database",
+    "final_state": "COMPLETE",
+    "max_iterations": 10,
+    "iterations": 2,
+    "events_produced": 11,
+    "state_transitions": [
+      "RUN_CREATED",
+      "PLANNING_STARTED",
+      "INSTRUCTION_SUBMITTED",
+      "TURN_CLAIMED",
+      "RESULT_SUBMITTED",
+      "REVIEW_STARTED",
+      "INSTRUCTION_SUBMITTED",
+      "TURN_CLAIMED",
+      "RESULT_SUBMITTED",
+      "REVIEW_STARTED",
+      "COMPLETED"
+    ]
+  },
+  "observed_worker_behavior": {
+    "tool_discovery": "Both fresh Codex sessions discovered the worker-only server and invoked ultracode_claim_instruction.",
+    "results": "Both workers submitted completed structured read-only results through the named worker MCP server.",
+    "worker_reported_changed_files": [],
+    "working_tree_observation": {
+      "clean": false,
+      "pre_existing_modified_paths": [
+        "specs/001-internal-loop/contracts/mcp-tools.md",
+        "tests/integration/test_mcp.py",
+        "ultracode/mcp/server.py"
+      ],
+      "worker_writes": []
+    },
+    "commands": [
+      "read-only inspection of AGENTS.md and README.md",
+      "git status --short"
+    ]
+  },
+  "compatibility_fix_verified": {
+    "client_request": {
+      "method": "tools/list",
+      "params": {
+        "_meta": {
+          "progressToken": 0
+        }
+      }
+    },
+    "outcome": "The MCP server accepted the standard metadata envelope and exposed only worker tools."
+  },
+  "manual_interventions_required": [
+    "A local planner MCP client explicitly created, read, continued, and completed the run.",
+    "Each Codex CLI worker session was explicitly launched.",
+    "A local control MCP client explicitly inspected status and history."
+  ],
+  "limitations": [
+    "This is not a ChatGPT Quick Chat planner-MCP validation.",
+    "This is not a fresh Codex desktop project-chat validation.",
+    "No automatic ChatGPT-to-Codex continuation was demonstrated."
+  ]
+}

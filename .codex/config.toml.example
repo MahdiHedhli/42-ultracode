@@ -6,8 +6,10 @@
 # session by default: role separation is part of the v0.1 safety model.
 #
 # Replace /ABSOLUTE/PATH/TO/42-ultracode with the path to this checkout. All
-# selected actors must use the same database path. The database is local state;
-# keep it out of version control and do not put credentials in this file.
+# selected actors must use the same *absolute* database path. The database is
+# local state; keep it out of version control and do not put credentials in
+# this file. The module form deliberately runs the checkout source, avoiding a
+# stale non-editable console-script wheel after local source changes.
 #
 # This is a project example, not an instruction to overwrite a user's global
 # Codex configuration. Merge the selected block into the appropriate trusted
@@ -16,19 +18,19 @@
 # Worker surface (default for a Codex executor task):
 [mcp_servers.ultracode_worker]
 command = "uv"
-args = ["run", "--no-editable", "ultracode", "mcp", "--role", "worker", "--database", ".ultracode/ultracode.db"]
+args = ["run", "--directory", "/ABSOLUTE/PATH/TO/42-ultracode", "--no-editable", "python", "-m", "ultracode.mcp.server", "--role", "worker", "--database", "/ABSOLUTE/PATH/TO/42-ultracode/.ultracode/ultracode.db"]
 cwd = "/ABSOLUTE/PATH/TO/42-ultracode"
 
 # Planner surface (for example, a supported local ChatGPT desktop MCP client).
 # Remove the active worker block above before enabling this one:
 # [mcp_servers.ultracode_planner]
 # command = "uv"
-# args = ["run", "--no-editable", "ultracode", "mcp", "--role", "planner", "--database", ".ultracode/ultracode.db"]
+# args = ["run", "--directory", "/ABSOLUTE/PATH/TO/42-ultracode", "--no-editable", "python", "-m", "ultracode.mcp.server", "--role", "planner", "--database", "/ABSOLUTE/PATH/TO/42-ultracode/.ultracode/ultracode.db"]
 # cwd = "/ABSOLUTE/PATH/TO/42-ultracode"
 
 # Human control surface (status/history/pause/resume/stop only). Remove the
 # active worker block above before enabling this one:
 # [mcp_servers.ultracode_control]
 # command = "uv"
-# args = ["run", "--no-editable", "ultracode", "mcp", "--role", "control", "--database", ".ultracode/ultracode.db"]
+# args = ["run", "--directory", "/ABSOLUTE/PATH/TO/42-ultracode", "--no-editable", "python", "-m", "ultracode.mcp.server", "--role", "control", "--database", "/ABSOLUTE/PATH/TO/42-ultracode/.ultracode/ultracode.db"]
 # cwd = "/ABSOLUTE/PATH/TO/42-ultracode"

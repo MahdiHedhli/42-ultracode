@@ -2,9 +2,10 @@
 
 The server uses JSON-RPC over stdio and implements the MCP `initialize`,
 `tools/list`, and `tools/call` requests. It returns JSON content and structured
-content for every tool result. Starting a server with one role exposes only that
-role's tools; role selection is a local capability boundary, not multi-user
-authentication.
+content for every tool result. `tools/list` accepts the standard nullable
+`cursor` and object `_meta` envelope, but does not paginate: a non-null cursor
+is rejected. Starting a server with one role exposes only that role's tools;
+role selection is a local capability boundary, not multi-user authentication.
 
 ## Planner Role
 

@@ -24,12 +24,13 @@ checkout path:
         "--directory",
         "/absolute/path/to/42-ultracode",
         "--no-editable",
-        "ultracode",
-        "mcp",
+        "python",
+        "-m",
+        "ultracode.mcp.server",
         "--role",
         "planner",
         "--database",
-        ".ultracode/ultracode.db"
+        "/absolute/path/to/42-ultracode/.ultracode/ultracode.db"
       ]
     }
   }
@@ -43,9 +44,12 @@ server name for those actors. Each actor should load only its matching entry:
 - `ultracode-worker` for executor capabilities; or
 - `ultracode-control` for human-control capabilities.
 
-Do not expose all three entries to one untrusted actor. The database path is
-intentionally relative to the project selected by `--directory`, so controller
-state stays in `.ultracode/` and out of the plugin manifest.
+Do not expose all three entries to one untrusted actor. Use the exact same
+absolute database path for every selected actor; relying on each client's
+working directory can split planner and worker state. The module launch form
+runs the checkout source rather than a potentially stale non-editable console
+script after local source changes. The database remains in the ignored
+`.ultracode/` directory and out of the plugin manifest.
 
 The project’s durable engineering Skills live under `.agents/skills/`.  This
 plugin intentionally ships no duplicate skill wrappers: its responsibility is

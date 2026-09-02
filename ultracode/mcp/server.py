@@ -451,8 +451,7 @@ class MCPServer:
         if method == "initialize":
             return self._initialize(raw_params)
         if method == "tools/list":
-            if raw_params not in (None, {}):
-                raise _invalid_params("tools/list does not accept parameters")
+            self._validate_list_tools_params(raw_params)
             tools: list[JsonValue] = []
             for name in self.tool_names:
                 tools.append(_TOOL_DEFINITIONS[name])
@@ -460,6 +459,31 @@ class MCPServer:
         if method != "tools/call":
             raise RpcFault(-32601, "Method not found")
         return self._call_tool(raw_params)
+
+    @staticmethod
+    def _validate_list_tools_params(raw_params: object) -> None:
+        """Accept the standard nullable pagination and metadata envelope.
+
+        Current MCP clients may serialize an absent ``cursor`` as JSON ``null``
+        and include the optional ``_meta`` envelope on a ``tools/list`` request.
+        This server never returns a pagination cursor, so a non-null cursor is
+        still invalid; accepting the null/default form keeps the role-scoped
+        server interoperable without widening the tool surface.
+        """
+
+        if raw_params is None:
+            return
+        if not isinstance(raw_params, Mapping):
+            raise _invalid_params("tools/list parameters must be an object")
+        validated = _validate_fields(raw_params, required=(), allowed=("cursor", "_meta"))
+        cursor = validated.get("cursor")
+        if cursor is not None:
+            if not isinstance(cursor, str):
+                raise _invalid_params("tools/list cursor must be a string or null")
+            raise _invalid_params("tools/list cursor is not supported")
+        metadata = validated.get("_meta")
+        if metadata is not None and not isinstance(metadata, Mapping):
+            raise _invalid_params("tools/list _meta must be an object")
 
     @staticmethod
     def _initialize(raw_params: object) -> JsonObject:

@@ -27,17 +27,20 @@ tests pass.
 
 ## Local MCP Exercise
 
-Start separate role-scoped processes against the same local state file:
+Start separate role-scoped processes against the same local state file. For
+cross-client use, make the database path absolute and identical in every
+client's configuration:
 
 ```sh
-uv run --no-editable ultracode mcp --role planner --database .ultracode/demo.db
-uv run --no-editable ultracode mcp --role worker --database .ultracode/demo.db
-uv run --no-editable ultracode mcp --role control --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role planner --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role worker --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role control --database .ultracode/demo.db
 ```
 
 Use the corresponding tool contracts to create a run, submit an instruction,
 claim it, submit a result, inspect history, and complete it. The automated MCP
-integration test performs this exchange without a GUI.
+integration test performs this exchange without a GUI. The module form keeps a
+checkout source change from being masked by a stale non-editable console wheel.
 
 ## Subscription Validation
 

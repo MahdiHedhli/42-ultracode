@@ -49,6 +49,27 @@ adapter—owns limits, policy, events, and state transitions.
   steer/interrupt possibilities are noted for future adapters, not required by the
   v0.1 core.
 
+## Validation Addendum (2026-09-02)
+
+- `codex-cli 0.152.1` reported a ChatGPT login and two fresh `codex exec`
+  worker sessions discovered the real worker-only MCP endpoint, claimed their
+  turns, and submitted structured results to one shared local run.
+- Separate role-scoped planner and control MCP processes read, continued,
+  completed, and replayed that run to `COMPLETE` with eleven ordered events and
+  two iterations. The public-safe record is
+  `docs/dogfood/2026-09-02-live-mcp-acceptance.json`.
+- Codex CLI 0.152.1 sent `{"_meta":{"progressToken":0}}` to `tools/list`.
+  The server accepts the standard nullable `cursor` and object metadata
+  envelope, while still rejecting a non-null cursor and unexpected top-level
+  fields.
+- The installed non-editable console script can lag checkout source after a
+  local edit. Checkout MCP configurations therefore use
+  `python -m ultracode.mcp.server` with an absolute checkout and database path;
+  release/console testing requires an explicit package rebuild.
+
+This addendum proves the local MCP/Codex worker transport. It does not change
+the Level C classification or prove automatic ChatGPT desktop planner loading.
+
 ## Consequences
 
 The demonstrated product level is **Level C** shared state with explicit planner

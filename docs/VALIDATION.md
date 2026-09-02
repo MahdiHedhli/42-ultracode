@@ -29,8 +29,12 @@ after restart. These tests register policy only and do not execute D6.
 
 The `--no-editable` flag is intentional. In the validated `uv 0.11.17` /
 CPython 3.13 environment, the editable console entry point did not resolve a
-checkout whose path contains spaces; a regular wheel installation did. Verify
-the command surface after setup with `uv run --no-editable ultracode --help`.
+checkout whose path contains spaces; a regular wheel installation did. Use
+`uv run --no-editable ultracode --help` to verify the installed command surface.
+For a checkout-local MCP server, use `python -m ultracode.mcp.server` below so
+local source edits are not hidden by an older installed wheel. If testing the
+console entry point after source edits, rebuild it explicitly with
+`uv sync --all-groups --no-editable --reinstall-package 42-ultracode`.
 
 ## Validation matrix
 
@@ -84,16 +88,18 @@ claim must fail without adding a second owner or corrupting the event order.
 Start role-scoped stdio servers against one database:
 
 ```sh
-uv run --no-editable ultracode mcp --role planner --database .ultracode/demo.db
-uv run --no-editable ultracode mcp --role worker --database .ultracode/demo.db
-uv run --no-editable ultracode mcp --role control --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role planner --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role worker --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role control --database .ultracode/demo.db
 ```
 
 The MCP integration test must perform `initialize`, `tools/list`, and
 `tools/call`, validate JSON-RPC failures, and show that each server advertises
 only its role's tools. Mutating calls require an idempotency key. Unknown tools,
 role-inappropriate calls, and malformed arguments must fail without a state
-change.
+change. Current clients may send the standard nullable `cursor` and `_meta`
+envelope with `tools/list`; accept that envelope without widening the role tool
+surface or supporting pagination.
 
 ### Skills
 
@@ -174,6 +180,24 @@ Use `workspace-write` only after a human approves the repository modification
 scope. This probe proves a subscription-authenticated Codex execution path; it
 does not prove automatic ChatGPT planner re-entry.
 
+### Live MCP acceptance evidence (2026-09-02)
+
+On `codex-cli 0.152.1`, `codex login status` reported a ChatGPT login. Two
+fresh `codex exec --ephemeral` sessions discovered a worker-only MCP endpoint,
+then each claimed and submitted one bounded read-only result through that
+endpoint. Separate local planner and control MCP processes, pointed at the
+same SQLite database, read the first result, issued the second instruction,
+completed the run, and replayed eleven ordered events to `COMPLETE` at
+iteration two. No instruction or result body was copied between the planner
+driver and the Codex worker sessions. Both workers reported no files that they
+changed; their read-only `git status` did show the three compatibility-patch
+files that already existed before either worker ran.
+
+This is concrete local MCP/Codex worker validation, not proof that ChatGPT
+Quick Chat or a fresh Codex desktop project task has a configured planner or
+worker endpoint. The sanitized record is
+[`docs/dogfood/2026-09-02-live-mcp-acceptance.json`](dogfood/2026-09-02-live-mcp-acceptance.json).
+
 ## Plugin / desktop validation
 
 This is an operator procedure, not an automated claim. It establishes the
@@ -188,7 +212,8 @@ highest supported cross-surface level without GUI automation.
    [plugin setup note](../plugins/42-ultracode/README.md), replace the checkout
    placeholder, and configure **only one** role for each client: planner for
    the planning surface, worker for Codex execution, or control for human
-   operations. Point all selected clients at the same database.
+   operations. Point all selected clients at the same explicit absolute database
+   path.
 3. Validate the Codex-side registration with `codex mcp list`. Restart or open a
    new desktop task if its tool list does not refresh after configuration.
 4. Open the checkout in Codex so its repository-local Skills are available.
@@ -257,6 +282,8 @@ The first executed record is
 [`docs/dogfood/2026-08-14-v01-evidence.json`](dogfood/2026-08-14-v01-evidence.json).
 It records both the two-turn scripted harness and the two-turn read-only
 subscription-backed Codex adapter run, including explicit Level C interventions.
+The later live worker-MCP acceptance record is
+[`docs/dogfood/2026-09-02-live-mcp-acceptance.json`](dogfood/2026-09-02-live-mcp-acceptance.json).
 
 ## Failure and recovery validation
 

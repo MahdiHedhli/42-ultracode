@@ -42,13 +42,15 @@ invocation on both sides**.
   demonstrated. v0.1 does not use GUI automation, screen scraping, or
   undocumented message injection to pretend otherwise.
 
-The subscription spike verified a read-only `codex exec` turn under a ChatGPT
-login and without an OpenAI API key. In the environment used for that spike,
-`gpt-5.5` was compatible; the installed CLI's configured `gpt-5.6-terra`
-default required a newer Codex version. See the
+The 2026-09-02 live acceptance verified two fresh `codex exec` worker sessions
+under a ChatGPT login, without an OpenAI API key. Each discovered the
+worker-only MCP server, claimed a turn, and submitted a structured read-only
+result to one shared SQLite run. Independent local planner and control MCP
+clients read, continued, completed, and replayed that run. This proves the
+local MCP/Codex worker path, not ChatGPT desktop planner loading. See the
 [architecture decision](docs/decisions/0001-v01-local-subscription-transport.md)
-and [validation guide](docs/VALIDATION.md) for the exact boundary and how to
-repeat the check.
+and [validation guide](docs/VALIDATION.md) for the exact boundary and the
+[sanitized acceptance record](docs/dogfood/2026-09-02-live-mcp-acceptance.json).
 
 ## Architecture
 
@@ -136,14 +138,18 @@ uv run --no-editable pytest
 Exercise the local MCP server against a shared database in separate terminals:
 
 ```sh
-uv run --no-editable ultracode mcp --role planner --database .ultracode/demo.db
-uv run --no-editable ultracode mcp --role worker --database .ultracode/demo.db
-uv run --no-editable ultracode mcp --role control --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role planner --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role worker --database .ultracode/demo.db
+uv run --no-editable python -m ultracode.mcp.server --role control --database .ultracode/demo.db
 ```
 
 Each process exposes only the tools for its declared role. Configure a client
 with only the role it needs; see [`.codex/config.toml.example`](.codex/config.toml.example)
 and the [desktop validation procedure](docs/VALIDATION.md#plugin--desktop-validation).
+For cross-client use, replace the relative example with one identical absolute
+database path in every client configuration. The module form is the checkout
+development command; an installed console entry point is also supported after
+an explicit package rebuild.
 
 To test the repository-local Codex plugin scaffold, which changes your personal
 Codex plugin configuration, run:
@@ -177,9 +183,12 @@ manual-intervention accounting in the evidence file. Read
 cross-surface product claim. A sanitized executed record is retained at
 [`docs/dogfood/2026-08-14-v01-evidence.json`](docs/dogfood/2026-08-14-v01-evidence.json).
 
-The `--no-editable` setup flag is intentional: it keeps the console entry point
+The `--no-editable` setup flag is intentional: it keeps installed command paths
 reproducible in the validated environment, including checkouts whose path
-contains spaces. Use the same flag after dependency or packaging changes.
+contains spaces. For a checkout-local MCP server, use the module form above so
+source edits are not hidden by an older installed wheel. If testing the console
+entry point after source edits, rebuild it explicitly with
+`uv sync --all-groups --no-editable --reinstall-package 42-ultracode`.
 
 ## Safety and trust boundaries
 

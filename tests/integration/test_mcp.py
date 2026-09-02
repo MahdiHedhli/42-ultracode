@@ -16,17 +16,33 @@ PROTOCOL_VERSION = "2025-03-26"
 class McpClient:
     """A deliberately small line-delimited JSON-RPC test client."""
 
-    def __init__(self, role: str, database: Path) -> None:
-        self.process = subprocess.Popen(
-            [
-                sys.executable,
+    def __init__(self, role: str, database: Path, *, checkout_module: bool = False) -> None:
+        command = [
+            sys.executable,
+            "-m",
+            "ultracode.mcp.server",
+            "--role",
+            role,
+            "--database",
+            str(database),
+        ]
+        if checkout_module:
+            command = [
+                "uv",
+                "run",
+                "--directory",
+                str(ROOT),
+                "--no-editable",
+                "python",
                 "-m",
                 "ultracode.mcp.server",
                 "--role",
                 role,
                 "--database",
                 str(database),
-            ],
+            ]
+        self.process = subprocess.Popen(
+            command,
             cwd=ROOT,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -113,6 +129,37 @@ def _tool_names(client: McpClient) -> set[str]:
     response = client.request("tools/list")
     assert "error" not in response, response
     return {tool["name"] for tool in response["result"]["tools"]}
+
+
+def test_tools_list_accepts_standard_null_cursor_and_metadata(tmp_path: Path) -> None:
+    """A current MCP client may serialize default list parameters explicitly."""
+
+    client = McpClient("worker", tmp_path / "ultracode.db", checkout_module=True)
+    try:
+        _initialize(client)
+        expected = {
+            "ultracode_claim_instruction",
+            "ultracode_submit_result",
+            "ultracode_report_progress",
+            "ultracode_report_blocker",
+        }
+        for params in (
+            {"cursor": None},
+            {"_meta": {"progressToken": 0}},
+            {"cursor": None, "_meta": {"progressToken": "mcp-test"}},
+        ):
+            response = client.request("tools/list", params)
+            assert "error" not in response, response
+            assert {tool["name"] for tool in response["result"]["tools"]} == expected
+
+        unsupported_cursor = client.request("tools/list", {"cursor": "next-page"})
+        assert unsupported_cursor["error"]["code"] == -32602
+        malformed_metadata = client.request("tools/list", {"_meta": "not-an-object"})
+        assert malformed_metadata["error"]["code"] == -32602
+        unexpected_field = client.request("tools/list", {"unexpected": True})
+        assert unexpected_field["error"]["code"] == -32602
+    finally:
+        client.close()
 
 
 def test_role_scoped_mcp_round_trip_across_subprocesses(tmp_path: Path) -> None:
