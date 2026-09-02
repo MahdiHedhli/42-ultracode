@@ -66,6 +66,9 @@ adapter—owns limits, policy, events, and state transitions.
   local edit. Checkout MCP configurations therefore use
   `python -m ultracode.mcp.server` with an absolute checkout and database path;
   release/console testing requires an explicit package rebuild.
+- Non-interactive `codex exec` needs `--approve-for-me` for expected local
+  state-mutating MCP calls. With its default `never` approval policy, Codex
+  discovered the worker tools but refused the claim safely.
 
 This addendum proves the local MCP/Codex worker transport. It does not change
 the Level C classification or prove automatic ChatGPT desktop planner loading.

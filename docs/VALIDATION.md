@@ -193,6 +193,11 @@ driver and the Codex worker sessions. Both workers reported no files that they
 changed; their read-only `git status` did show the three compatibility-patch
 files that already existed before either worker ran.
 
+The non-interactive CLI was launched with `--approve-for-me` for the expected
+state-mutating MCP claims/results. Its default `never` approval policy exposed
+the worker tools but safely refused those calls. This is a Codex CLI execution
+setting, not an Ultracode role or policy bypass.
+
 This is concrete local MCP/Codex worker validation, not proof that ChatGPT
 Quick Chat or a fresh Codex desktop project task has a configured planner or
 worker endpoint. The sanitized record is

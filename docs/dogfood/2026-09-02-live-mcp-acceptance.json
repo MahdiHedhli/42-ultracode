@@ -13,7 +13,8 @@
     "codex_cli_version": "0.152.1",
     "authentication": "codex login status reported ChatGPT",
     "model": "gpt-5.5",
-    "api_key_supplied_to_acceptance_command": false
+    "api_key_supplied_to_acceptance_command": false,
+    "mcp_mutation_approval": "codex exec used --approve-for-me; the default never policy exposed worker tools but refused the state-mutating claim"
   },
   "shared_state": {
     "database": "ignored local .ultracode acceptance database",
