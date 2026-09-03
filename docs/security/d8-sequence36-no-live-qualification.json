@@ -1,0 +1,93 @@
+{
+  "schema": "42-ultracode.d8-sequence36-no-live-qualification/1.0.0",
+  "sequence": 36,
+  "result": "PASS",
+  "scope": "checkpoint-free no-live D8 supervised-delivery qualification",
+  "starting_authority": {
+    "commit": "667b8e307982478b885a1c118fed205b19ca44d2",
+    "tree": "e352fdbffbc31dae9f3c4ace40a503c769f27772"
+  },
+  "qualified_code": {
+    "commit": "0efcd47ce556da8dd4735854fc59b926328d28a2",
+    "tree": "27c521673664b7f6b039b8b285cbaec238ac5de1",
+    "changed_paths": [
+      "scripts/verify_codex_schema_profile.py",
+      "tests/security/test_supervised_delivery_security.py",
+      "tests/unit/test_supervised_delivery.py",
+      "ultracode/supervised_delivery.py"
+    ],
+    "out_of_scope_changed_paths": 0,
+    "structural_repair_loops": 1,
+    "structural_repair_loop_limit": 10,
+    "no_progress_cycles": 0
+  },
+  "codex_identity": {
+    "authentication": "AUTHENTICATED",
+    "cli_version": "codex-cli 0.152.1",
+    "desktop_app_version": "26.831.21537",
+    "desktop_app_build": "7579",
+    "signing_authority": "Developer ID Application: OpenAI OpCo, LLC (2DC432GLL2)",
+    "team_identifier": "2DC432GLL2",
+    "codesign_verification": "PASS",
+    "executable_sha256": "99a6fdb0e0f9188e62dd6681c7ed3c5cc343358291a53ea21a9d4202e09cde9e"
+  },
+  "schema_profile": {
+    "name": "f017-d8-supervised-delivery/0.152-compatible",
+    "status": "PASS",
+    "files": {
+      "v1/InitializeParams.json": "6f0094be9a65242ec779a40794cbd4fdfa32fca1e45084a16adfb50501d33ea2",
+      "v1/InitializeResponse.json": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9",
+      "v2/ErrorNotification.json": "d77732536ef8864799e4fbb5bf6965a9f1970a6195e523f144252a82287c08e7",
+      "v2/ThreadListParams.json": "b227bb78acf9b91060d03c56d3f2072cdd9f1bd08290c11e8869f1a663b16da2",
+      "v2/ThreadListResponse.json": "abbb5b43bc3ea34ed187a496f85bc0223c48630636904d6198a08a17c9d9baed",
+      "v2/ThreadReadParams.json": "dfe040c6ac71d30795b8be3f3ff232e66f362a37f883b491e5d1ea367f470db4",
+      "v2/ThreadReadResponse.json": "f3c5c2f9dac8e20fd8a8a536ae00ea7a7a0dc3c70e5a628ff5b561067cd43206",
+      "v2/ThreadResumeParams.json": "8ac68582a81d60940b10b330be8546123f56bfe246b56f8a4f121da00f347cf2",
+      "v2/ThreadResumeResponse.json": "fa71d02c807e7b8b83bf7206f9f4f4e25cabf47d9aa210a44a9eb405295b2c91",
+      "v2/ThreadStatusChangedNotification.json": "26f3c60c1b73f7fa2d31c74429cdc36f8746c76c33e3d314b3fb61d3661f05f6",
+      "v2/TurnCompletedNotification.json": "b85470d9eadbcad52700bd1d5aae187a9cd995e50b7099ed05469b6d41d6b997",
+      "v2/TurnStartParams.json": "a3835e8c1e942e4b358e1a670939b89918b16c4d13105a579899892b7ade6dea",
+      "v2/TurnStartResponse.json": "7a817a98d78ac8e982c82c24bf8f7a2d2e61cca9fb91e5386e31cae0888e38e2",
+      "v2/TurnStartedNotification.json": "c6d039d1c0ebb5a77b6ab34d22f096f783cfdbfa5c251cdcf3dfdb4587a97127"
+    }
+  },
+  "validation": {
+    "format": "PASS",
+    "lint": "PASS",
+    "type_check": "PASS",
+    "focused_lifecycle_and_security": {
+      "passed": 126,
+      "failed": 0
+    },
+    "complete_suite": {
+      "passed": 577,
+      "failed": 0
+    },
+    "deterministic_fake_peer_runs": 20,
+    "dogfood_restart_runs": 2,
+    "dogfood_restart_failures": 0,
+    "selected_mutation_tests": {
+      "passed": 40,
+      "failed": 0
+    },
+    "live_schema_mutations": {
+      "total": 10,
+      "killed": 10,
+      "survivors": 0
+    },
+    "privacy_scan": "PASS",
+    "diff_check": "PASS"
+  },
+  "operation_census": {
+    "real_app_server_launches": 0,
+    "real_task_or_thread_operations": 0,
+    "real_route_resolutions": 0,
+    "real_delivery_attempts": 0,
+    "external_reviewer_invocations": 0
+  },
+  "limitations": [
+    "This evidence qualifies only the checkpoint-free no-live D8 transport boundary.",
+    "It contains no target identity, route locator, registry content, credentials, or delivery result.",
+    "It does not claim a live delivery was attempted or completed."
+  ]
+}
