@@ -29,14 +29,16 @@ def test_only_fixed_subprocess_launch_exists() -> None:
     assert isinstance(keywords["env"], ast.Call)
 
 
-def test_identity_probes_are_fixed_and_pinned() -> None:
+def test_identity_probes_are_fixed_and_run_local() -> None:
     source = Path(inspect.getfile(subject)).read_text(encoding="utf-8")
     assert '(str(_CODEX_EXECUTABLE), "--version")' in source
+    assert '("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(_CODEX_EXECUTABLE))' in source
     assert '("/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE))' in source
     assert "start_new_session=True" in source
     assert "os.killpg(process.pid, signal.SIGKILL)" in source
     assert subject._EXPECTED_CODEX_TEAM_ID == "2DC432GLL2"
-    assert subject._EXPECTED_CODEX_SHA256 == ("dd304ffe232fa9e782ed3e5358776d270e394c2fb85cab846f989823f0843313")
+    assert "_EXPECTED_CODEX_SHA256" not in source
+    assert "_EXPECTED_USER_AGENT" not in source
     assert 'component == Path("/Applications")' in source
     assert "not bool(info.st_mode & 0o002)" in source
 

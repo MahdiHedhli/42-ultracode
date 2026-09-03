@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
-from types import MappingProxyType
 from typing import BinaryIO, NoReturn, SupportsIndex, TextIO, cast
 from weakref import WeakKeyDictionary
 
@@ -54,12 +53,12 @@ _DEFAULT_OPERATION_SECONDS = 5.0
 _CLEANUP_TAIL_SECONDS = 0.5
 _CLEANUP_SECONDS = 3.0
 _SYMBOL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-_EXPECTED_USER_AGENT = "codex-cli 0.149.0-alpha.4.3"
-_EXPECTED_CODEX_SHA256 = "dd304ffe232fa9e782ed3e5358776d270e394c2fb85cab846f989823f0843313"
 _EXPECTED_CODEX_AUTHORITY = "Developer ID Application: OpenAI OpCo, LLC (2DC432GLL2)"
 _EXPECTED_CODEX_TEAM_ID = "2DC432GLL2"
-_EXPECTED_CODEX_APP_VERSION = "26.818.61809"
-_EXPECTED_CODEX_APP_BUILD = "7019"
+_SYNTHETIC_USER_AGENT = "codex-cli synthetic"
+_CODEX_CLI_VERSION = re.compile(r"codex-cli [0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?\Z")
+_CODEX_APP_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)+\Z")
+_CODEX_APP_BUILD = re.compile(r"[1-9][0-9]*\Z")
 _QUALIFICATION_RESULT = "D8_SUPERVISED_DELIVERY_STABLE_ELIGIBILITY_RESULT: PASS_PENDING_PLANNER_REVIEW"
 _SECRET_BYTES = (
     re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -81,11 +80,10 @@ class DeliveryOutcome(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ProtocolProfile:
-    codex_version: str
     request_methods: frozenset[str]
     client_notifications: frozenset[str]
     server_notifications: frozenset[str]
-    schema_sha256: Mapping[str, str]
+    schema_names: frozenset[str]
 
 
 @dataclass(slots=True)
@@ -109,28 +107,25 @@ class _OperationCounters:
 
 
 PROTOCOL_PROFILE = ProtocolProfile(
-    codex_version=_EXPECTED_USER_AGENT,
     request_methods=frozenset({"initialize", "thread/list", "thread/read", "thread/resume", "turn/start"}),
     client_notifications=frozenset({"initialized"}),
     server_notifications=frozenset({"thread/status/changed", "turn/started", "turn/completed", "error"}),
-    schema_sha256=MappingProxyType(
+    schema_names=frozenset(
         {
-            "v2/ThreadListParams.json": "b227bb78acf9b91060d03c56d3f2072cdd9f1bd08290c11e8869f1a663b16da2",
-            "v2/ThreadListResponse.json": "d12dce8505f06cb53404bdac3cbfffbb64f8808ff48556f7d09996f2198e0719",
-            "v2/ThreadReadResponse.json": "96017b5053c54ccddd8f8a1d8a07fb850e88bd761ad9e17fc9cb0b82a6870fe8",
-            "v2/ThreadResumeResponse.json": "32fc20f4853f89bcee82dba6065751e0b08c104cf6a5c51f9c1aa658d1ce9154",
-            "v2/TurnStartResponse.json": "1203962cc16ebf6e1474935a979e07bb054afb9b47060cafb5f4674e56a589d2",
-            "v2/ThreadStatusChangedNotification.json": (
-                "26f3c60c1b73f7fa2d31c74429cdc36f8746c76c33e3d314b3fb61d3661f05f6"
-            ),
-            "v1/InitializeParams.json": "6f0094be9a65242ec779a40794cbd4fdfa32fca1e45084a16adfb50501d33ea2",
-            "v1/InitializeResponse.json": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9",
-            "v2/ThreadReadParams.json": "7222da641029c071811f6bcb651de347fe037e6689db22b3fad0c5b17b7f1c21",
-            "v2/ThreadResumeParams.json": "7d9ff4b7d83702448715ada355a9713af6f71beaf6fcfcb08c4f03ac52842813",
-            "v2/TurnStartParams.json": "ff2e7e0796fbe2ad99e5ec7d489cc8c8630b75f2ab8f17857711107587e3197d",
-            "v2/TurnStartedNotification.json": "4630c58b3c9096203379bfc5bf84378a591ee44dd30b5f816ce171cb99ac8261",
-            "v2/TurnCompletedNotification.json": "237d7f5ded4a245473634422f5f7c3170b99dd19d413fec0d515077ff577fd29",
-            "v2/ErrorNotification.json": "eb2c1291cd21ca2c1fca72fc7ee647f8809fa0cb04620a981a9e5ce3fee35cbd",
+            "v1/InitializeParams.json",
+            "v1/InitializeResponse.json",
+            "v2/ErrorNotification.json",
+            "v2/ThreadListParams.json",
+            "v2/ThreadListResponse.json",
+            "v2/ThreadReadParams.json",
+            "v2/ThreadReadResponse.json",
+            "v2/ThreadResumeParams.json",
+            "v2/ThreadResumeResponse.json",
+            "v2/ThreadStatusChangedNotification.json",
+            "v2/TurnCompletedNotification.json",
+            "v2/TurnStartParams.json",
+            "v2/TurnStartResponse.json",
+            "v2/TurnStartedNotification.json",
         }
     ),
 )
@@ -199,15 +194,6 @@ def _strict_object(raw: bytes, *, label: str, max_bytes: int = _MAX_LINE_BYTES) 
 
     bound(parsed, 0)
     return cast(dict[str, object], parsed)
-
-
-def _schema_profile_sha256() -> str:
-    return _sha(_canonical(dict(PROTOCOL_PROFILE.schema_sha256)))
-
-
-def _verify_schema_hashes(actual: Mapping[str, str]) -> None:
-    if dict(actual) != dict(PROTOCOL_PROFILE.schema_sha256):
-        raise DeliveryError("installed Codex schema bundle does not match the pinned 0.149 profile")
 
 
 @dataclass(slots=True)
@@ -358,6 +344,7 @@ def _minimal_environment(source: Mapping[str, str] | None = None) -> dict[str, s
 _FIXED_IDENTITY_PROBES = frozenset(
     {
         (str(_CODEX_EXECUTABLE), "--version"),
+        ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(_CODEX_EXECUTABLE)),
         ("/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE)),
     }
 )
@@ -459,6 +446,7 @@ class _DesktopIdentity:
 def _inspect_desktop_identity() -> _DesktopIdentity:
     try:
         version_stdout, _version_stderr = _run_fixed_identity_probe((str(_CODEX_EXECUTABLE), "--version"))
+        _run_fixed_identity_probe(("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(_CODEX_EXECUTABLE)))
         _signature_stdout, signature_stderr = _run_fixed_identity_probe(
             ("/usr/bin/codesign", "-dv", "--verbose=4", str(_CODEX_EXECUTABLE))
         )
@@ -485,19 +473,16 @@ def _inspect_desktop_identity() -> _DesktopIdentity:
 
 
 def _require_production_identity(authority: object) -> _DesktopIdentity:
-    record = _validate_executable(authority)
-    if record.sha256 != _EXPECTED_CODEX_SHA256:
-        raise DeliveryError("installed Codex executable hash does not match the pinned production identity")
+    _validate_executable(authority)
     identity = _inspect_desktop_identity()
-    expected = _DesktopIdentity(
-        cli_version=_EXPECTED_USER_AGENT,
-        authority=_EXPECTED_CODEX_AUTHORITY,
-        team_id=_EXPECTED_CODEX_TEAM_ID,
-        app_version=_EXPECTED_CODEX_APP_VERSION,
-        app_build=_EXPECTED_CODEX_APP_BUILD,
-    )
-    if identity != expected:
-        raise DeliveryError("installed Codex Desktop identity does not match the pinned production identity")
+    if (
+        identity.authority != _EXPECTED_CODEX_AUTHORITY
+        or identity.team_id != _EXPECTED_CODEX_TEAM_ID
+        or _CODEX_CLI_VERSION.fullmatch(identity.cli_version) is None
+        or _CODEX_APP_VERSION.fullmatch(identity.app_version) is None
+        or _CODEX_APP_BUILD.fullmatch(identity.app_build) is None
+    ):
+        raise DeliveryError("installed Codex Desktop identity does not match the trusted production identity")
     return identity
 
 
@@ -903,6 +888,7 @@ class _JsonlSession:
         counters: _OperationCounters | None = None,
         deadline: _Deadline | None = None,
         health_check: Callable[[], None] | None = None,
+        expected_user_agent: str = _SYNTHETIC_USER_AGENT,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -913,6 +899,7 @@ class _JsonlSession:
         self._turn_request_written = False
         self._deadline = deadline or _Deadline.start()
         self._health_check = health_check or (lambda: None)
+        self._expected_user_agent = expected_user_agent
         self._read_buffer = bytearray()
         self._target_thread_id = ""
         self._status = "notLoaded"
@@ -1102,6 +1089,7 @@ class _JsonlSession:
             "threadSource",
             "forkedFromId",
             "gitInfo",
+            "historyMode",
             "name",
             "parentThreadId",
             "path",
@@ -1139,6 +1127,10 @@ class _JsonlSession:
             raise DeliveryError("thread optional string violates the selected schema")
         if "recencyAt" in thread and thread["recencyAt"] is not None and type(thread["recencyAt"]) is not int:
             raise DeliveryError("thread recency violates the selected schema")
+        if "historyMode" in thread:
+            history_mode = thread["historyMode"]
+            if type(history_mode) is not str or history_mode not in {"legacy", "paginated"}:
+                raise DeliveryError("thread history mode violates the selected schema")
         if (
             "sectionEnteredAt" in thread
             and thread["sectionEnteredAt"] is not None
@@ -1243,7 +1235,12 @@ class _JsonlSession:
             if not resume
             else {"approvalPolicy", "approvalsReviewer", "cwd", "model", "modelProvider", "sandbox", "thread"}
         )
-        allowed = required if not resume else required | {"instructionSources", "reasoningEffort", "serviceTier"}
+        allowed = (
+            required
+            if not resume
+            else required
+            | {"instructionSources", "itemsBackwardsCursor", "reasoningEffort", "serviceTier", "turnsBackwardsCursor"}
+        )
         if not required.issubset(result) or not set(result).issubset(allowed):
             raise DeliveryError("thread response violates the selected schema")
         thread = result["thread"]
@@ -1259,6 +1256,11 @@ class _JsonlSession:
             raise DeliveryError("target thread is not idle")
         if resume and result.get("cwd") != route.cwd:
             raise DeliveryError("resume cwd mismatch")
+        if resume:
+            for field in ("itemsBackwardsCursor", "turnsBackwardsCursor"):
+                value = result.get(field)
+                if value is not None and (type(value) is not str or not value or len(value) > 1024):
+                    raise DeliveryError("resume cursor violates the selected schema")
         self._status = status
 
     def prepare(self, route: _RouteAuthority) -> None:
@@ -1270,8 +1272,8 @@ class _JsonlSession:
             raise DeliveryError("initialize response violates the selected schema")
         if any(type(initialized[key]) is not str for key in initialized):
             raise DeliveryError("initialize response types violate the selected schema")
-        if initialized["userAgent"] != _EXPECTED_USER_AGENT:
-            raise DeliveryError("app-server version does not match the frozen protocol profile")
+        if initialized["userAgent"] != self._expected_user_agent:
+            raise DeliveryError("app-server version does not match the sealed run-local identity")
         self._notify("initialized", {})
         active_ids: set[str] = set()
         archived_ids: set[str] = set()
@@ -1640,6 +1642,11 @@ def _perform(
     real_operations = streams is None
     operation_counters = counters or _OperationCounters()
     session_deadline = deadline or _Deadline.start()
+    expected_user_agent = _SYNTHETIC_USER_AGENT
+    if real_operations:
+        if executable_authority is None:
+            raise DeliveryError("real delivery requires sealed executable authority")
+        expected_user_agent = _require_production_identity(executable_authority).cli_version
     route = _resolve_alias(route_registry, preview.target_alias)
     thread_id = route.thread_id
     if real_operations:
@@ -1667,6 +1674,7 @@ def _perform(
                 counters=operation_counters,
                 deadline=session_deadline,
                 health_check=health_check,
+                expected_user_agent=expected_user_agent,
             )
             try:
                 session.prepare(route)
@@ -1686,8 +1694,6 @@ def _perform(
 
         if streams is not None:
             return run(*streams)
-        if executable_authority is None:
-            raise DeliveryError("real delivery requires sealed executable authority")
         operation_counters.real_app_server_launches += 1
         process = _CodexProcess(executable_authority, session_deadline)
         with process as process_streams:
@@ -1729,10 +1735,11 @@ def deliver_foreground(
 
 def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
     thread = {
-        "cliVersion": "0.149.0-alpha.4.3",
+        "cliVersion": _SYNTHETIC_USER_AGENT.removeprefix("codex-cli "),
         "createdAt": 1,
         "cwd": "/synthetic/workspace",
         "ephemeral": False,
+        "historyMode": "paginated",
         "id": thread_id,
         "modelProvider": "openai",
         "preview": "synthetic",
@@ -1769,7 +1776,7 @@ def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
                 "codexHome": "/synthetic/codex-home",
                 "platformFamily": "unix",
                 "platformOs": "macos",
-                "userAgent": _EXPECTED_USER_AGENT,
+                "userAgent": _SYNTHETIC_USER_AGENT,
             },
         },
         {"id": 2, "jsonrpc": "2.0", "result": {"data": [thread], "nextCursor": "page-2"}},
@@ -1785,8 +1792,10 @@ def _fake_transcript(thread_id: str = "synthetic-thread") -> bytes:
                 "cwd": "/synthetic/workspace",
                 "model": "synthetic",
                 "modelProvider": "openai",
+                "itemsBackwardsCursor": None,
                 "sandbox": "read-only",
                 "thread": thread,
+                "turnsBackwardsCursor": None,
             },
         },
         {"id": 7, "jsonrpc": "2.0", "result": {"thread": thread}},

@@ -830,6 +830,17 @@ def test_cleanup_failure_downgrades_apparent_delivery_to_terminal_uncertain(tmp_
 
     monkeypatch.setattr(delivery.subprocess, "Popen", forbidden)
     monkeypatch.setattr(delivery, "_CodexProcess", lambda _authority, _deadline: FailingCleanupContext())
+    monkeypatch.setattr(
+        delivery,
+        "_require_production_identity",
+        lambda _authority: delivery._DesktopIdentity(
+            delivery._SYNTHETIC_USER_AGENT,
+            delivery._EXPECTED_CODEX_AUTHORITY,
+            delivery._EXPECTED_CODEX_TEAM_ID,
+            "1.0.0",
+            "1",
+        ),
+    )
     preview = DeliveryPreview("SYNTHETIC_TARGET", b"synthetic supervised delivery")
     journal = tmp_path / "journal.jsonl"
     outcome, _session = delivery._perform(
@@ -868,29 +879,28 @@ def test_execution_result_preflight_uses_production_vocabulary() -> None:
         delivery.preflight_qualification_result(invalid)
 
 
-def test_pinned_sequence28_schema_digest_literals_are_change_detector_pins() -> None:
-    expected = {
-        "v2/ThreadListParams.json": "b227bb78acf9b91060d03c56d3f2072cdd9f1bd08290c11e8869f1a663b16da2",
-        "v2/ThreadListResponse.json": "d12dce8505f06cb53404bdac3cbfffbb64f8808ff48556f7d09996f2198e0719",
-        "v2/ThreadReadResponse.json": "96017b5053c54ccddd8f8a1d8a07fb850e88bd761ad9e17fc9cb0b82a6870fe8",
-        "v2/ThreadResumeResponse.json": "32fc20f4853f89bcee82dba6065751e0b08c104cf6a5c51f9c1aa658d1ce9154",
-        "v2/TurnStartResponse.json": "1203962cc16ebf6e1474935a979e07bb054afb9b47060cafb5f4674e56a589d2",
-        "v2/ThreadStatusChangedNotification.json": ("26f3c60c1b73f7fa2d31c74429cdc36f8746c76c33e3d314b3fb61d3661f05f6"),
+def test_protocol_profile_uses_semantic_schema_names_without_historical_digest_pins() -> None:
+    assert delivery.PROTOCOL_PROFILE.schema_names == {
+        "v1/InitializeParams.json",
+        "v1/InitializeResponse.json",
+        "v2/ErrorNotification.json",
+        "v2/ThreadListParams.json",
+        "v2/ThreadListResponse.json",
+        "v2/ThreadReadParams.json",
+        "v2/ThreadReadResponse.json",
+        "v2/ThreadResumeParams.json",
+        "v2/ThreadResumeResponse.json",
+        "v2/ThreadStatusChangedNotification.json",
+        "v2/TurnCompletedNotification.json",
+        "v2/TurnStartParams.json",
+        "v2/TurnStartResponse.json",
+        "v2/TurnStartedNotification.json",
     }
-    assert {key: delivery.PROTOCOL_PROFILE.schema_sha256[key] for key in expected} == expected
 
 
-@pytest.mark.parametrize("name", sorted(delivery.PROTOCOL_PROFILE.schema_sha256))
-def test_schema_hash_verifier_rejects_each_wrong_digest(name: str) -> None:
-    actual = dict(delivery.PROTOCOL_PROFILE.schema_sha256)
-    actual[name] = "0" * 64
-    with pytest.raises(DeliveryError, match="schema bundle"):
-        delivery._verify_schema_hashes(actual)
-
-
-def test_production_identity_rejects_executable_hash_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_production_identity_accepts_run_local_executable_hash(monkeypatch: pytest.MonkeyPatch) -> None:
     authority = object()
-    changed = delivery._ExecutableRecord(
+    run_local = delivery._ExecutableRecord(
         path=delivery._CODEX_EXECUTABLE,
         device=1,
         inode=2,
@@ -900,9 +910,16 @@ def test_production_identity_rejects_executable_hash_drift(monkeypatch: pytest.M
         mtime_ns=4,
         sha256="0" * 64,
     )
-    monkeypatch.setattr(delivery, "_validate_executable", lambda selected: changed if selected is authority else None)
-    with pytest.raises(DeliveryError, match="executable hash"):
-        delivery._require_production_identity(authority)
+    monkeypatch.setattr(delivery, "_validate_executable", lambda selected: run_local if selected is authority else None)
+    identity = delivery._DesktopIdentity(
+        cli_version="codex-cli 0.152.1",
+        authority=delivery._EXPECTED_CODEX_AUTHORITY,
+        team_id=delivery._EXPECTED_CODEX_TEAM_ID,
+        app_version="26.831.21537",
+        app_build="7579",
+    )
+    monkeypatch.setattr(delivery, "_inspect_desktop_identity", lambda: identity)
+    assert delivery._require_production_identity(authority) == identity
 
 
 def test_fixed_identity_probe_is_allowlisted_owned_and_reaped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -914,7 +931,7 @@ def test_fixed_identity_probe_is_allowlisted_owned_and_reaped(monkeypatch: pytes
 
         def communicate(self, *, timeout: int) -> tuple[bytes, bytes]:
             assert timeout == 10
-            return b"codex-cli 0.149.0-alpha.4.3\n", b""
+            return b"codex-cli 0.152.1\n", b""
 
     def popen(argv: tuple[str, ...], **kwargs: object) -> Process:
         observed["argv"] = argv
@@ -923,7 +940,7 @@ def test_fixed_identity_probe_is_allowlisted_owned_and_reaped(monkeypatch: pytes
 
     monkeypatch.setattr(delivery.subprocess, "Popen", popen)
     stdout, stderr = delivery._run_fixed_identity_probe((str(delivery._CODEX_EXECUTABLE), "--version"))
-    assert stdout == b"codex-cli 0.149.0-alpha.4.3\n"
+    assert stdout == b"codex-cli 0.152.1\n"
     assert stderr == b""
     assert observed["close_fds"] is True
     assert observed["start_new_session"] is True
@@ -998,7 +1015,8 @@ def test_fixed_identity_probe_group_signal_failure_still_reaps_direct_child(
     ]
 
 
-def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("cli_version", ["codex-cli current", "codex-cli 0.152", "other 0.152.1"])
+def test_production_identity_rejects_noncanonical_cli(monkeypatch: pytest.MonkeyPatch, cli_version: str) -> None:
     authority = object()
     record = delivery._ExecutableRecord(
         path=delivery._CODEX_EXECUTABLE,
@@ -1008,18 +1026,18 @@ def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) ->
         mode=0o100755,
         uid=501,
         mtime_ns=4,
-        sha256=delivery._EXPECTED_CODEX_SHA256,
+        sha256="a" * 64,
     )
     monkeypatch.setattr(delivery, "_validate_executable", lambda selected: record if selected is authority else None)
     monkeypatch.setattr(
         delivery,
         "_inspect_desktop_identity",
         lambda: delivery._DesktopIdentity(
-            cli_version="codex-cli 0.146.0",
+            cli_version=cli_version,
             authority=delivery._EXPECTED_CODEX_AUTHORITY,
             team_id=delivery._EXPECTED_CODEX_TEAM_ID,
-            app_version=delivery._EXPECTED_CODEX_APP_VERSION,
-            app_build=delivery._EXPECTED_CODEX_APP_BUILD,
+            app_version="26.831.21537",
+            app_build="7579",
         ),
     )
     with pytest.raises(DeliveryError, match="Desktop identity"):
@@ -1031,7 +1049,7 @@ def test_production_identity_rejects_old_cli(monkeypatch: pytest.MonkeyPatch) ->
     [
         ("authority", "Developer ID Application: Untrusted (2DC432GLL2)"),
         ("team_id", "UNTRUSTED1"),
-        ("app_version", "0.0.0"),
+        ("app_version", "not-a-version"),
         ("app_build", "0"),
     ],
 )
@@ -1047,15 +1065,15 @@ def test_production_identity_rejects_signer_or_app_drift(
         mode=0o100755,
         uid=501,
         mtime_ns=4,
-        sha256=delivery._EXPECTED_CODEX_SHA256,
+        sha256="b" * 64,
     )
     monkeypatch.setattr(delivery, "_validate_executable", lambda selected: record if selected is authority else None)
     values = {
-        "cli_version": delivery._EXPECTED_USER_AGENT,
+        "cli_version": "codex-cli 0.152.1",
         "authority": delivery._EXPECTED_CODEX_AUTHORITY,
         "team_id": delivery._EXPECTED_CODEX_TEAM_ID,
-        "app_version": delivery._EXPECTED_CODEX_APP_VERSION,
-        "app_build": delivery._EXPECTED_CODEX_APP_BUILD,
+        "app_version": "26.831.21537",
+        "app_build": "7579",
     }
     values[field] = wrong
     monkeypatch.setattr(delivery, "_inspect_desktop_identity", lambda: delivery._DesktopIdentity(**values))
@@ -1107,6 +1125,39 @@ def test_thread_accepts_nullable_section_and_appearance() -> None:
     assert delivery._JsonlSession._thread(thread, route) == "idle"
     thread["section"] = {"id": "section-1", "name": "Main", "appearance": None}
     assert delivery._JsonlSession._thread(thread, route) == "idle"
+
+
+@pytest.mark.parametrize("history_mode", ["legacy", "paginated"])
+def test_thread_accepts_current_history_modes(history_mode: str) -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    thread["historyMode"] = history_mode
+    assert delivery._JsonlSession._thread(thread, route) == "idle"
+
+
+@pytest.mark.parametrize("history_mode", [None, "future", [], {}])
+def test_thread_rejects_unknown_or_malformed_history_mode(history_mode: object) -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    thread["historyMode"] = history_mode
+    with pytest.raises(DeliveryError, match="history mode"):
+        delivery._JsonlSession._thread(thread, route)
+
+
+@pytest.mark.parametrize("field", ["itemsBackwardsCursor", "turnsBackwardsCursor"])
+def test_resume_accepts_current_cursor_fields_and_rejects_malformed(field: str) -> None:
+    route = delivery._RouteAuthority("synthetic-thread", "appServer", "/synthetic/workspace")
+    response = next(
+        json.loads(line)["result"]
+        for line in delivery._fake_transcript().splitlines()
+        if json.loads(line).get("id") == 6
+    )
+    session = delivery._JsonlSession(io.BytesIO(), io.BytesIO())
+    response[field] = "cursor-1"
+    session._exact_target(response, route, resume=True)
+    response[field] = []
+    with pytest.raises(DeliveryError, match="resume cursor"):
+        session._exact_target(response, route, resume=True)
 
 
 @pytest.mark.parametrize("field", ["projectId", "section"])

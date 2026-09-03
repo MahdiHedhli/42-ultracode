@@ -1,138 +1,270 @@
 #!/usr/bin/env python3
-"""Verify raw Codex schema pins and the accepted 0.146 -> 0.149 semantic path set."""
+"""Qualify the installed stable Codex schema by consumed semantic shape."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
+from typing import cast
 
-from ultracode.supervised_delivery import PROTOCOL_PROFILE, _verify_schema_hashes
+from ultracode.supervised_delivery import PROTOCOL_PROFILE
 
-BASELINE_SHA256 = {
-    "v1/InitializeParams.json": "4f576f99e285beb28f71f48a72b887c1f517dada86fee348fe2af0a35511de23",
-    "v1/InitializeResponse.json": "86dcd236d0576a82c85b933586dc45731260eab1b6edb3447b03f790277322b1",
-    "v2/ErrorNotification.json": "1ec871b02771300a26a34e41a7cfaf7484330a8c37c197d1ac133e753b083a09",
-    "v2/ThreadListParams.json": "3b37cf361c29b959cf29828db3017c0a5e38d9c24de5fbd089bd44d42f05d5f0",
-    "v2/ThreadListResponse.json": "5b01b0c03141c2a15559879294ef065daac9715615d7df65371baf5f119d9958",
-    "v2/ThreadReadParams.json": "db97080f82facc3259dbb9404e9f0df81e360619f4cd73983a9d99d25f5089ee",
-    "v2/ThreadReadResponse.json": "dd1f9df782fc0e0a9d752dbf6f725634355b4889f9393074c9a71f768dcb2990",
-    "v2/ThreadResumeParams.json": "1dc47d294d0de32f334e0829893d743ec64393ebcf00d7212c9c55b03c34ed23",
-    "v2/ThreadResumeResponse.json": "a729b3d290402b1e7ee11661001dc194b59f0b5743cbe9e64cd6720862179865",
-    "v2/ThreadStatusChangedNotification.json": "146af6d3702c4f3c844bd10b6b6b3e2b872e958a8d7d822157c19aaa6dc085f6",
-    "v2/TurnCompletedNotification.json": "5b5f2ca515658ea6fcce7e961d1c3feddb3f48c0dcc813260c7ccf77a2d016af",
-    "v2/TurnStartParams.json": "48a0ee95b669b47f5557c68b99a4d459b50577ccce8ebc5976532f50e3c6d059",
-    "v2/TurnStartResponse.json": "099184dc9d6195cd965b8a90ee5d1cb05c87d9b329acecdfbd63f358e660d568",
-    "v2/TurnStartedNotification.json": "e268134e79cae246e39f110e67bd2efbb49ce9a572520a85a96a7325eaf31e03",
+_VERSION = re.compile(r"codex-cli [0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?\Z")
+_MAX_SCHEMA_BYTES = 8 * 1024 * 1024
+
+_TOP_SHAPES: dict[str, tuple[set[str], set[str]]] = {
+    "v1/InitializeParams.json": ({"capabilities", "clientInfo"}, {"clientInfo"}),
+    "v1/InitializeResponse.json": (
+        {"codexHome", "platformFamily", "platformOs", "userAgent"},
+        {"codexHome", "platformFamily", "platformOs", "userAgent"},
+    ),
+    "v2/ErrorNotification.json": (
+        {"error", "threadId", "turnId", "willRetry"},
+        {"error", "threadId", "turnId", "willRetry"},
+    ),
+    "v2/ThreadListParams.json": (
+        {
+            "archived",
+            "cursor",
+            "cwd",
+            "limit",
+            "modelProviders",
+            "searchTerm",
+            "sectionId",
+            "sortDirection",
+            "sortKey",
+            "sourceKinds",
+            "useStateDbOnly",
+        },
+        set(),
+    ),
+    "v2/ThreadListResponse.json": ({"backwardsCursor", "data", "nextCursor"}, {"data"}),
+    "v2/ThreadReadParams.json": ({"includeTurns", "threadId"}, {"threadId"}),
+    "v2/ThreadReadResponse.json": ({"thread"}, {"thread"}),
+    "v2/ThreadResumeParams.json": (
+        {
+            "approvalPolicy",
+            "approvalsReviewer",
+            "baseInstructions",
+            "config",
+            "cwd",
+            "developerInstructions",
+            "excludeTurns",
+            "model",
+            "modelProvider",
+            "personality",
+            "sandbox",
+            "serviceTier",
+            "threadId",
+        },
+        {"threadId"},
+    ),
+    "v2/ThreadResumeResponse.json": (
+        {
+            "approvalPolicy",
+            "approvalsReviewer",
+            "cwd",
+            "instructionSources",
+            "itemsBackwardsCursor",
+            "model",
+            "modelProvider",
+            "reasoningEffort",
+            "sandbox",
+            "serviceTier",
+            "thread",
+            "turnsBackwardsCursor",
+        },
+        {"approvalPolicy", "approvalsReviewer", "cwd", "model", "modelProvider", "sandbox", "thread"},
+    ),
+    "v2/ThreadStatusChangedNotification.json": ({"status", "threadId"}, {"status", "threadId"}),
+    "v2/TurnCompletedNotification.json": ({"threadId", "turn"}, {"threadId", "turn"}),
+    "v2/TurnStartParams.json": (
+        {
+            "approvalPolicy",
+            "approvalsReviewer",
+            "clientUserMessageId",
+            "cwd",
+            "effort",
+            "input",
+            "model",
+            "outputSchema",
+            "personality",
+            "sandboxPolicy",
+            "serviceTier",
+            "serviceTierForTurn",
+            "summary",
+            "threadId",
+            "toolOutput",
+            "turnTrigger",
+        },
+        {"input", "threadId"},
+    ),
+    "v2/TurnStartResponse.json": ({"turn"}, {"turn"}),
+    "v2/TurnStartedNotification.json": ({"threadId", "turn"}, {"threadId", "turn"}),
 }
 
-EXPECTED_CHANGED_PATHS = {
-    "v1/InitializeParams.json": [
-        "/definitions/InitializeCapabilities/properties/extensions",
-        "/definitions/InitializeCapabilities/properties/mcpServerOpenaiFormElicitation/description",
-    ],
-    "v2/ErrorNotification.json": ["/definitions/CodexErrorInfo/oneOf"],
-    "v2/ThreadListParams.json": [
-        "/definitions/ThreadSortKey/enum",
-        "/properties/isPinned",
-        "/properties/sectionId",
-    ],
-    "v2/ThreadListResponse.json": [
-        "/definitions/AgentMessageDelivery",
-        "/definitions/CodexErrorInfo/oneOf",
-        "/definitions/CommandAction/oneOf",
-        "/definitions/ImageGenerationFailure",
-        "/definitions/Thread/properties/isPinned",
-        "/definitions/Thread/properties/projectId",
-        "/definitions/Thread/properties/section",
-        "/definitions/Thread/properties/sectionEnteredAt",
-        "/definitions/Thread/required",
-        "/definitions/ThreadItem/oneOf",
-        "/definitions/ThreadSection",
-        "/definitions/ThreadSectionAppearance",
-    ],
-    "v2/ThreadReadResponse.json": [],
-    "v2/ThreadResumeParams.json": ["/definitions/ResponseItem/oneOf"],
-    "v2/ThreadResumeResponse.json": [],
-    "v2/TurnCompletedNotification.json": [
-        "/definitions/AgentMessageDelivery",
-        "/definitions/CodexErrorInfo/oneOf",
-        "/definitions/CommandAction/oneOf",
-        "/definitions/ImageGenerationFailure",
-        "/definitions/ThreadItem/oneOf",
-    ],
-    "v2/TurnStartResponse.json": [],
-    "v2/TurnStartedNotification.json": [],
+_THREAD_PROPERTIES = {
+    "agentNickname",
+    "agentRole",
+    "cliVersion",
+    "createdAt",
+    "cwd",
+    "ephemeral",
+    "forkedFromId",
+    "gitInfo",
+    "historyMode",
+    "id",
+    "modelProvider",
+    "name",
+    "parentThreadId",
+    "path",
+    "preview",
+    "projectId",
+    "recencyAt",
+    "section",
+    "sectionEnteredAt",
+    "sessionId",
+    "source",
+    "status",
+    "threadSource",
+    "turns",
+    "updatedAt",
 }
-
-SHARED_CHANGE_GROUPS = {
-    "v2/ThreadReadResponse.json": "v2/ThreadListResponse.json",
-    "v2/ThreadResumeResponse.json": "v2/ThreadListResponse.json",
-    "v2/TurnStartResponse.json": "v2/TurnCompletedNotification.json",
-    "v2/TurnStartedNotification.json": "v2/TurnCompletedNotification.json",
+_THREAD_REQUIRED = {
+    "cliVersion",
+    "createdAt",
+    "cwd",
+    "ephemeral",
+    "id",
+    "modelProvider",
+    "preview",
+    "projectId",
+    "sessionId",
+    "source",
+    "status",
+    "turns",
+    "updatedAt",
 }
+_TURN_PROPERTIES = {"completedAt", "durationMs", "error", "id", "items", "itemsView", "startedAt", "status"}
+_TURN_REQUIRED = {"id", "items", "status"}
 
 
-def _hashes(root: Path, names: set[str]) -> dict[str, str]:
-    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(names)}
+def _object(value: object, label: str) -> dict[str, object]:
+    if type(value) is not dict:
+        raise ValueError(f"{label} is not an object")
+    return cast(dict[str, object], value)
 
 
-def _diff_paths(old: object, new: object, path: str = "") -> list[str]:
-    if type(old) is not type(new):
-        return [path or "/"]
-    if type(old) is dict:
-        old_map = dict(old)
-        new_map = dict(new)
-        paths = [f"{path}/{key}" for key in sorted(set(old_map) ^ set(new_map))]
-        for key in sorted(set(old_map) & set(new_map)):
-            paths.extend(_diff_paths(old_map[key], new_map[key], f"{path}/{key}"))
-        return paths
-    if type(old) is list:
-        return [] if old == new else [path or "/"]
-    return [] if old == new else [path or "/"]
+def _require_shape(value: object, properties: set[str], required: set[str], label: str) -> None:
+    selected = _object(value, label)
+    actual_properties = set(_object(selected.get("properties"), f"{label}.properties"))
+    actual_required = set(cast(list[object], selected.get("required", [])))
+    if actual_properties != properties or actual_required != required:
+        raise ValueError(f"{label} semantic shape changed")
+
+
+def _verify_thread_definitions(schema: dict[str, object], label: str) -> None:
+    definitions = _object(schema.get("definitions"), f"{label}.definitions")
+    _require_shape(definitions.get("Thread"), _THREAD_PROPERTIES, _THREAD_REQUIRED, f"{label}.Thread")
+    history = _object(definitions.get("ThreadHistoryMode"), f"{label}.ThreadHistoryMode")
+    if history.get("type") != "string" or history.get("enum") != ["legacy", "paginated"]:
+        raise ValueError(f"{label} history mode changed")
+    source = _object(definitions.get("ThreadSource"), f"{label}.ThreadSource")
+    if source.get("type") != "string":
+        raise ValueError(f"{label} thread source changed")
+
+
+def _verify_turn_definitions(schema: dict[str, object], label: str) -> None:
+    definitions = _object(schema.get("definitions"), f"{label}.definitions")
+    _require_shape(definitions.get("Turn"), _TURN_PROPERTIES, _TURN_REQUIRED, f"{label}.Turn")
+    status = _object(definitions.get("TurnStatus"), f"{label}.TurnStatus")
+    if status.get("type") != "string" or status.get("enum") != [
+        "completed",
+        "interrupted",
+        "failed",
+        "inProgress",
+    ]:
+        raise ValueError(f"{label} turn status changed")
+
+
+def _verify_status_definition(schema: dict[str, object]) -> None:
+    definitions = _object(schema.get("definitions"), "status.definitions")
+    active_flag = _object(definitions.get("ThreadActiveFlag"), "ThreadActiveFlag")
+    if active_flag.get("type") != "string" or active_flag.get("enum") != [
+        "waitingOnApproval",
+        "waitingOnUserInput",
+    ]:
+        raise ValueError("thread active flags changed")
+    status = _object(definitions.get("ThreadStatus"), "ThreadStatus")
+    variants = status.get("oneOf")
+    if type(variants) is not list or len(variants) != 4:
+        raise ValueError("thread status variants changed")
+    kinds: set[str] = set()
+    for index, raw in enumerate(variants):
+        variant = _object(raw, f"ThreadStatus[{index}]")
+        properties = _object(variant.get("properties"), f"ThreadStatus[{index}].properties")
+        type_schema = _object(properties.get("type"), f"ThreadStatus[{index}].type")
+        enum = type_schema.get("enum")
+        if type(enum) is not list or len(enum) != 1 or type(enum[0]) is not str:
+            raise ValueError("thread status discriminator changed")
+        kind = cast(str, enum[0])
+        kinds.add(kind)
+        expected = {"activeFlags", "type"} if kind == "active" else {"type"}
+        if set(properties) != expected or set(cast(list[object], variant.get("required", []))) != expected:
+            raise ValueError("thread status fields changed")
+    if kinds != {"notLoaded", "idle", "systemError", "active"}:
+        raise ValueError("thread status kinds changed")
+
+
+def _load_schema(root: Path, name: str) -> tuple[dict[str, object], str]:
+    path = root / name
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"missing or unsafe schema: {name}")
+    raw = path.read_bytes()
+    if not raw or len(raw) > _MAX_SCHEMA_BYTES:
+        raise ValueError(f"schema size is unsafe: {name}")
+    return _object(json.loads(raw), name), hashlib.sha256(raw).hexdigest()
+
+
+def qualify(root: Path, codex_version: str) -> dict[str, object]:
+    if _VERSION.fullmatch(codex_version) is None:
+        raise ValueError("Codex version is not canonical")
+    if set(_TOP_SHAPES) != set(PROTOCOL_PROFILE.schema_names):
+        raise ValueError("schema-name authority is inconsistent")
+    schemas: dict[str, dict[str, object]] = {}
+    hashes: dict[str, str] = {}
+    for name in sorted(PROTOCOL_PROFILE.schema_names):
+        schemas[name], hashes[name] = _load_schema(root, name)
+        _require_shape(schemas[name], *_TOP_SHAPES[name], name)
+    for name in ("v2/ThreadListResponse.json", "v2/ThreadReadResponse.json", "v2/ThreadResumeResponse.json"):
+        _verify_thread_definitions(schemas[name], name)
+    for name in (
+        "v2/ThreadListResponse.json",
+        "v2/ThreadReadResponse.json",
+        "v2/ThreadResumeResponse.json",
+        "v2/TurnStartResponse.json",
+        "v2/TurnStartedNotification.json",
+        "v2/TurnCompletedNotification.json",
+    ):
+        _verify_turn_definitions(schemas[name], name)
+    _verify_status_definition(schemas["v2/ThreadStatusChangedNotification.json"])
+    return {
+        "codex_version": codex_version,
+        "schema_sha256": hashes,
+        "semantic_profile": "f017-d8-supervised-delivery/0.152-compatible",
+        "status": "PASS",
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("baseline", type=Path)
     parser.add_argument("current", type=Path)
+    parser.add_argument("--codex-version", required=True)
     args = parser.parse_args()
-    names = set(PROTOCOL_PROFILE.schema_sha256)
-    if _hashes(args.baseline, names) != BASELINE_SHA256:
-        raise SystemExit("baseline raw schema hashes do not match")
-    current_hashes = _hashes(args.current, names)
-    _verify_schema_hashes(current_hashes)
-    changed: dict[str, list[str]] = {}
-    for name in sorted(names):
-        old = json.loads((args.baseline / name).read_text(encoding="utf-8"))
-        new = json.loads((args.current / name).read_text(encoding="utf-8"))
-        paths = sorted(set(_diff_paths(old, new)))
-        if paths:
-            changed[name] = paths
-    expected = {
-        name: EXPECTED_CHANGED_PATHS.get(source, EXPECTED_CHANGED_PATHS.get(name, []))
-        for name, source in {**{name: name for name in EXPECTED_CHANGED_PATHS}, **SHARED_CHANGE_GROUPS}.items()
-    }
-    if changed != {name: sorted(paths) for name, paths in expected.items()}:
-        raise SystemExit("semantic schema path classification does not match")
-    print(
-        json.dumps(
-            {
-                "baseline_cli": "codex-cli 0.146.0",
-                "baseline_sha256": BASELINE_SHA256,
-                "changed": changed,
-                "current_cli": PROTOCOL_PROFILE.codex_version,
-                "current_sha256": current_hashes,
-                "generation_command": (
-                    "/Applications/Codex.app/Contents/Resources/codex "
-                    "app-server generate-json-schema --out <new-private-directory>"
-                ),
-                "unchanged": sorted(names - set(changed)),
-            },
-            sort_keys=True,
-        )
-    )
+    print(json.dumps(qualify(args.current, args.codex_version), sort_keys=True))
     return 0
 
 
