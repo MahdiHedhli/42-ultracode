@@ -30,10 +30,13 @@ from .protocol import ExecutionResult, ResultStatus, ValidationError
 __all__ = (
     "APP_SERVER_ARGV",
     "D8_POLICY_SHA256",
+    "DISCOVERY_PROTOCOL_PROFILE",
     "DeliveryError",
     "DeliveryOutcome",
     "DeliveryPreview",
     "ProtocolProfile",
+    "ThreadListing",
+    "ThreadListingEntry",
     "confirm_preview",
     "deliver_foreground",
     "preflight_qualification_result",
@@ -48,6 +51,8 @@ _MAX_LINE_BYTES = 1024 * 1024
 _MAX_JSON_DEPTH = 16
 _MAX_JSON_NODES = 8192
 _MAX_STDERR_BYTES = 64 * 1024
+_MAX_LIST_PAGES = 1024
+_MAX_INTERLEAVED_NOTIFICATIONS = 256
 _DEFAULT_SESSION_SECONDS = 60.0
 _DEFAULT_OPERATION_SECONDS = 5.0
 _CLEANUP_TAIL_SECONDS = 0.5
@@ -126,6 +131,21 @@ PROTOCOL_PROFILE = ProtocolProfile(
             "v2/TurnStartParams.json",
             "v2/TurnStartResponse.json",
             "v2/TurnStartedNotification.json",
+        }
+    ),
+)
+
+DISCOVERY_PROTOCOL_PROFILE = ProtocolProfile(
+    request_methods=frozenset({"initialize", "thread/list"}),
+    client_notifications=frozenset({"initialized"}),
+    server_notifications=frozenset({"thread/status/changed"}),
+    schema_names=frozenset(
+        {
+            "v1/InitializeParams.json",
+            "v1/InitializeResponse.json",
+            "v2/ThreadListParams.json",
+            "v2/ThreadListResponse.json",
+            "v2/ThreadStatusChangedNotification.json",
         }
     ),
 )
@@ -715,6 +735,24 @@ class _RouteAuthority:
     cwd: str
 
 
+@dataclass(frozen=True, slots=True)
+class ThreadListingEntry:
+    thread_id: str
+    source_kind: str
+    cwd: str
+    status: str
+    name: str | None
+    preview: str
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadListing:
+    entries: tuple[ThreadListingEntry, ...]
+    active_identities: frozenset[str]
+    archived_identities: frozenset[str]
+    rejected_entries: int
+
+
 def _resolve_alias(path: Path, alias: str) -> _RouteAuthority:
     alias = _symbol(alias, "target_alias")
     data = _strict_object(_read_owned_regular(path, max_bytes=65536), label="route registry", max_bytes=65536)
@@ -889,6 +927,8 @@ class _JsonlSession:
         deadline: _Deadline | None = None,
         health_check: Callable[[], None] | None = None,
         expected_user_agent: str = _SYNTHETIC_USER_AGENT,
+        protocol_profile: ProtocolProfile = PROTOCOL_PROFILE,
+        ephemeral_field_required: bool = True,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -900,11 +940,16 @@ class _JsonlSession:
         self._deadline = deadline or _Deadline.start()
         self._health_check = health_check or (lambda: None)
         self._expected_user_agent = expected_user_agent
+        self._protocol_profile = protocol_profile
+        self._ephemeral_field_required = ephemeral_field_required
         self._read_buffer = bytearray()
         self._target_thread_id = ""
         self._status = "notLoaded"
         self.methods: list[str] = []
         self.notifications: list[str] = []
+        self.inbound_responses = 0
+        self.inbound_server_requests = 0
+        self.inbound_notifications: dict[str, int] = {}
 
     def _write(self, message: Mapping[str, object]) -> None:
         line = _canonical(dict(message)) + b"\n"
@@ -960,7 +1005,7 @@ class _JsonlSession:
         return _strict_object(line[:-1], label="transport response")
 
     def _request(self, method: str, params: Mapping[str, object]) -> dict[str, object]:
-        if method not in PROTOCOL_PROFILE.request_methods:
+        if method not in self._protocol_profile.request_methods:
             raise DeliveryError("method is outside the frozen protocol profile")
         if method == "turn/start":
             self._turn_start_count += 1
@@ -981,11 +1026,15 @@ class _JsonlSession:
         if method == "turn/start":
             self._turn_request_written = True
         response = self._read()
-        while response.get("method") == "thread/status/changed":
-            self._accept_status_notification(response)
+        while "method" in response:
+            if "id" in response:
+                self.inbound_server_requests += 1
+                raise DeliveryError("inbound server requests are forbidden")
+            self._accept_interleaved_notification(
+                response,
+                allow_unrelated_status=method != "turn/start" and not self._turn_request_written,
+            )
             response = self._read()
-        if "method" in response:
-            raise DeliveryError("server requests and out-of-order notifications are prohibited")
         if set(response) not in ({"id", "jsonrpc", "result"}, {"error", "id", "jsonrpc"}):
             raise DeliveryError("response violates the closed JSON-RPC shape")
         if response.get("jsonrpc") != "2.0" or response.get("id") != request_id:
@@ -994,10 +1043,11 @@ class _JsonlSession:
             raise DeliveryError("app-server returned an error response")
         if type(response["result"]) is not dict:
             raise DeliveryError("response result must be an object")
+        self.inbound_responses += 1
         return cast(dict[str, object], response["result"])
 
     def _notify(self, method: str, params: Mapping[str, object]) -> None:
-        if method not in PROTOCOL_PROFILE.client_notifications:
+        if method not in self._protocol_profile.client_notifications:
             raise DeliveryError("notification is outside the frozen protocol profile")
         self.notifications.append(method)
         self._write({"jsonrpc": "2.0", "method": method, "params": dict(params)})
@@ -1020,19 +1070,44 @@ class _JsonlSession:
                 return "active"
         raise DeliveryError("thread status violates the stable schema")
 
-    def _accept_status_notification(self, message: Mapping[str, object]) -> None:
+    def _accept_interleaved_notification(
+        self,
+        message: Mapping[str, object],
+        *,
+        allow_unrelated_status: bool,
+    ) -> None:
+        if "id" in message:
+            self.inbound_server_requests += 1
+            raise DeliveryError("inbound server requests are prohibited")
         if set(message) != {"jsonrpc", "method", "params"} or message.get("jsonrpc") != "2.0":
             raise DeliveryError("status notification violates JSON-RPC")
-        if message.get("method") != "thread/status/changed" or type(message.get("params")) is not dict:
+        method = message.get("method")
+        if type(method) is not str or method not in self._protocol_profile.server_notifications:
+            self.inbound_notifications["unknown"] = self.inbound_notifications.get("unknown", 0) + 1
+            raise DeliveryError("server notification is outside the frozen profile")
+        count = sum(self.inbound_notifications.values()) + 1
+        if count > _MAX_INTERLEAVED_NOTIFICATIONS:
+            raise DeliveryError("interleaved notification budget exhausted")
+        self.inbound_notifications[method] = self.inbound_notifications.get(method, 0) + 1
+        if method != "thread/status/changed" or type(message.get("params")) is not dict:
             raise DeliveryError("status notification violates the selected schema")
         params = cast(dict[object, object], message["params"])
-        if set(params) != {"status", "threadId"} or params.get("threadId") != self._target_thread_id:
+        thread_id = params.get("threadId")
+        if set(params) != {"status", "threadId"} or type(thread_id) is not str or not thread_id or len(thread_id) > 256:
+            raise DeliveryError("status notification violates the selected schema")
+        status = self._status_value(params.get("status"))
+        if thread_id != self._target_thread_id:
+            if allow_unrelated_status:
+                return
             raise DeliveryError("status notification target mismatch")
-        self._status = self._status_value(params.get("status"))
-        if self._status == "active" and self._turn_request_written:
+        self._status = status
+        if status == "active" and self._turn_request_written:
             return
-        if self._status not in {"notLoaded", "idle"}:
+        if status not in {"notLoaded", "idle"}:
             raise DeliveryError("target thread became ineligible")
+
+    def _accept_status_notification(self, message: Mapping[str, object]) -> None:
+        self._accept_interleaved_notification(message, allow_unrelated_status=False)
 
     @staticmethod
     def _turn(value: object) -> dict[object, object]:
@@ -1064,7 +1139,22 @@ class _JsonlSession:
         return turn
 
     @staticmethod
-    def _thread(value: object, route: _RouteAuthority) -> str:
+    def _capture_thread_identity(value: object) -> str | None:
+        if type(value) is not dict:
+            return None
+        identifier = cast(dict[object, object], value).get("id")
+        safe = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+        if (
+            type(identifier) is not str
+            or not identifier
+            or len(identifier) > 256
+            or any(c not in safe for c in identifier)
+        ):
+            return None
+        return identifier
+
+    @staticmethod
+    def _thread_entry(value: object, *, ephemeral_field_required: bool) -> ThreadListingEntry:
         if type(value) is not dict:
             raise DeliveryError("thread violates the selected schema")
         thread = cast(dict[object, object], value)
@@ -1072,7 +1162,6 @@ class _JsonlSession:
             "cliVersion",
             "createdAt",
             "cwd",
-            "ephemeral",
             "id",
             "modelProvider",
             "preview",
@@ -1083,6 +1172,8 @@ class _JsonlSession:
             "turns",
             "updatedAt",
         }
+        if ephemeral_field_required:
+            required.add("ephemeral")
         allowed = required | {
             "agentNickname",
             "agentRole",
@@ -1097,16 +1188,16 @@ class _JsonlSession:
             "section",
             "sectionEnteredAt",
         }
+        if not ephemeral_field_required:
+            allowed.discard("ephemeral")
         if not required.issubset(thread) or not set(thread).issubset(allowed):
             raise DeliveryError("thread violates the selected field set")
         string_fields = ("cliVersion", "cwd", "id", "modelProvider", "preview", "sessionId")
         if any(type(thread[key]) is not str or len(cast(str, thread[key])) > 4096 for key in string_fields):
             raise DeliveryError("thread identity fields violate the selected schema")
-        if (
-            type(thread["createdAt"]) is not int
-            or type(thread["updatedAt"]) is not int
-            or type(thread["ephemeral"]) is not bool
-        ):
+        if type(thread["createdAt"]) is not int or type(thread["updatedAt"]) is not int:
+            raise DeliveryError("thread scalar fields violate the selected schema")
+        if ephemeral_field_required and type(thread["ephemeral"]) is not bool:
             raise DeliveryError("thread scalar fields violate the selected schema")
         turns = thread["turns"]
         if type(turns) is not list or len(cast(list[object], turns)) > 128:
@@ -1162,32 +1253,67 @@ class _JsonlSession:
                         raise DeliveryError("thread section appearance violates the selected schema")
         if "gitInfo" in thread and thread["gitInfo"] is not None and type(thread["gitInfo"]) is not dict:
             raise DeliveryError("thread git information violates the selected schema")
-        if thread["source"] != route.source_kind or thread["cwd"] != route.cwd:
-            raise DeliveryError("thread source or cwd does not match the sealed filter")
-        return _JsonlSession._status_value(thread["status"])
+        identifier = _JsonlSession._capture_thread_identity(thread)
+        source_kind = thread["source"]
+        cwd = thread["cwd"]
+        if identifier is None:
+            raise DeliveryError("thread/list contains an invalid identity")
+        if type(source_kind) is not str or source_kind not in {"cli", "vscode", "exec", "appServer"}:
+            raise DeliveryError("thread source kind is not eligible")
+        if (
+            type(cwd) is not str
+            or not cwd.startswith("/")
+            or len(cwd) > 4096
+            or "\x00" in cwd
+            or posixpath.normpath(cwd) != cwd
+            or "//" in cwd
+            or any(component in {".", ".."} for component in cwd.split("/"))
+        ):
+            raise DeliveryError("thread cwd is not canonical")
+        ephemeral = cast(bool, thread["ephemeral"]) if ephemeral_field_required else False
+        if ephemeral:
+            raise DeliveryError("ephemeral thread is ineligible")
+        name = thread.get("name")
+        return ThreadListingEntry(
+            thread_id=identifier,
+            source_kind=source_kind,
+            cwd=cwd,
+            status=_JsonlSession._status_value(thread["status"]),
+            name=cast(str | None, name),
+            preview=cast(str, thread["preview"]),
+        )
 
-    def _list_membership(
+    @staticmethod
+    def _thread(value: object, route: _RouteAuthority) -> str:
+        entry = _JsonlSession._thread_entry(value, ephemeral_field_required=True)
+        if entry.source_kind != route.source_kind or entry.cwd != route.cwd:
+            raise DeliveryError("thread source or cwd does not match the sealed filter")
+        return entry.status
+
+    def _list_page_set(
         self,
-        route: _RouteAuthority,
         *,
         archived: bool,
         identities: set[str],
-    ) -> int:
+        route: _RouteAuthority | None,
+    ) -> tuple[list[ThreadListingEntry], int]:
         cursor: str | None = None
         cursors: set[str] = set()
-        target_count = 0
+        entries: list[ThreadListingEntry] = []
+        rejected = 0
         try:
-            for _page in range(32):
+            for _page in range(_MAX_LIST_PAGES):
                 params: dict[str, object] = {
                     "archived": archived,
                     "cursor": cursor,
-                    "cwd": route.cwd,
                     "limit": 100,
                     "sortDirection": "desc",
                     "sortKey": "created_at",
-                    "sourceKinds": [route.source_kind],
                     "useStateDbOnly": True,
                 }
+                if route is not None:
+                    params["cwd"] = route.cwd
+                    params["sourceKinds"] = [route.source_kind]
                 result = self._request("thread/list", params)
                 if "data" not in result or not set(result).issubset({"backwardsCursor", "data", "nextCursor"}):
                     raise DeliveryError("thread/list response violates the selected schema")
@@ -1199,26 +1325,31 @@ class _JsonlSession:
                     raise DeliveryError("thread/list page violates the selected bound")
                 page_new = 0
                 for item in cast(list[object], data):
-                    status = self._thread(item, route)
-                    selected = cast(dict[object, object], item)
-                    identifier = selected["id"]
-                    if (
-                        type(identifier) is not str
-                        or not identifier
-                        or len(identifier) > 256
-                        or identifier in identities
-                    ):
+                    identifier = self._capture_thread_identity(item)
+                    if identifier is not None and identifier in identities:
                         raise DeliveryError("thread/list contains an invalid or duplicate identity")
+                    try:
+                        entry = self._thread_entry(item, ephemeral_field_required=self._ephemeral_field_required)
+                    except DeliveryError:
+                        if route is not None and identifier == route.thread_id:
+                            raise DeliveryError("target thread is malformed") from None
+                        if archived and identifier is None:
+                            raise DeliveryError("archived thread lacks a safe identity") from None
+                        if identifier is not None:
+                            identities.add(identifier)
+                            page_new += 1
+                        rejected += 1
+                        continue
+                    identifier = entry.thread_id
                     identities.add(identifier)
                     page_new += 1
-                    if identifier == route.thread_id:
-                        target_count += 1
-                        if status not in {"notLoaded", "idle"}:
-                            raise DeliveryError("target thread is not idle")
-                        self._status = status
+                    if route is not None and (entry.source_kind != route.source_kind or entry.cwd != route.cwd):
+                        raise DeliveryError("thread source or cwd does not match the sealed filter")
+                    if not archived and entry.status in {"notLoaded", "idle"}:
+                        entries.append(entry)
                 next_cursor = result.get("nextCursor")
                 if next_cursor is None:
-                    return target_count
+                    return entries, rejected
                 if page_new == 0:
                     raise DeliveryError("thread/list pagination made no progress")
                 if type(next_cursor) is not str or not next_cursor or len(next_cursor) > 1024 or next_cursor in cursors:
@@ -1228,6 +1359,38 @@ class _JsonlSession:
             raise DeliveryError("thread/list pagination budget exhausted")
         finally:
             cursors.clear()
+
+    def list_threads(self, route: _RouteAuthority | None = None) -> ThreadListing:
+        active_ids: set[str] = set()
+        archived_ids: set[str] = set()
+        active, active_rejected = self._list_page_set(archived=False, identities=active_ids, route=route)
+        _archived, archived_rejected = self._list_page_set(archived=True, identities=archived_ids, route=route)
+        if active_ids & archived_ids:
+            raise DeliveryError("thread/list membership is inconsistent across archive filters")
+        eligible = tuple(entry for entry in active if entry.thread_id not in archived_ids)
+        if route is not None:
+            matching = [entry for entry in eligible if entry.thread_id == route.thread_id]
+            if len(matching) != 1:
+                raise DeliveryError("target must occur exactly once in the active listing")
+            self._status = matching[0].status
+        return ThreadListing(
+            entries=eligible,
+            active_identities=frozenset(active_ids),
+            archived_identities=frozenset(archived_ids),
+            rejected_entries=active_rejected + archived_rejected,
+        )
+
+    def initialize(self) -> None:
+        initialized = self._request(
+            "initialize", {"clientInfo": {"name": "42-ultracode", "title": "42 Ultracode", "version": "0.1.0"}}
+        )
+        if set(initialized) != {"codexHome", "platformFamily", "platformOs", "userAgent"}:
+            raise DeliveryError("initialize response violates the selected schema")
+        if any(type(initialized[key]) is not str for key in initialized):
+            raise DeliveryError("initialize response types violate the selected schema")
+        if initialized["userAgent"] != self._expected_user_agent:
+            raise DeliveryError("app-server version does not match the sealed run-local identity")
+        self._notify("initialized", {})
 
     def _exact_target(self, result: Mapping[str, object], route: _RouteAuthority, *, resume: bool = False) -> None:
         required = (
@@ -1265,28 +1428,8 @@ class _JsonlSession:
 
     def prepare(self, route: _RouteAuthority) -> None:
         self._target_thread_id = route.thread_id
-        initialized = self._request(
-            "initialize", {"clientInfo": {"name": "42-ultracode", "title": "42 Ultracode", "version": "0.1.0"}}
-        )
-        if set(initialized) != {"codexHome", "platformFamily", "platformOs", "userAgent"}:
-            raise DeliveryError("initialize response violates the selected schema")
-        if any(type(initialized[key]) is not str for key in initialized):
-            raise DeliveryError("initialize response types violate the selected schema")
-        if initialized["userAgent"] != self._expected_user_agent:
-            raise DeliveryError("app-server version does not match the sealed run-local identity")
-        self._notify("initialized", {})
-        active_ids: set[str] = set()
-        archived_ids: set[str] = set()
-        try:
-            if self._list_membership(route, archived=False, identities=active_ids) != 1:
-                raise DeliveryError("target must occur exactly once in the active listing")
-            if self._list_membership(route, archived=True, identities=archived_ids) != 0:
-                raise DeliveryError("target must be absent from the archived listing")
-            if active_ids & archived_ids:
-                raise DeliveryError("thread/list membership is inconsistent across archive filters")
-        finally:
-            active_ids.clear()
-            archived_ids.clear()
+        self.initialize()
+        self.list_threads(route)
         self._exact_target(self._request("thread/read", {"includeTurns": False, "threadId": route.thread_id}), route)
         self._exact_target(self._request("thread/resume", {"threadId": route.thread_id}), route, resume=True)
         self._exact_target(self._request("thread/read", {"includeTurns": False, "threadId": route.thread_id}), route)
@@ -1716,12 +1859,14 @@ def deliver_foreground(
     journal_path: Path,
     input_stream: TextIO,
     output_stream: TextIO,
+    _executable_authority: object | None = None,
 ) -> DeliveryOutcome:
     """Perform one foreground, human-confirmed delivery through fixed local stdio."""
     message = _read_owned_regular(message_path, max_bytes=_MAX_MESSAGE_BYTES)
     preview = DeliveryPreview(target_alias=target_alias, message=message)
     _require_interactive_tty(input_stream, output_stream)
-    executable_authority = _seal_production_executable()
+    executable_authority = _executable_authority or _seal_production_executable()
+    _require_production_identity(executable_authority)
     capability = confirm_preview(preview, input_stream=input_stream, output_stream=output_stream)
     outcome, _session = _perform(
         preview=preview,

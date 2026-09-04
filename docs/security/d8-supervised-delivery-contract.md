@@ -69,3 +69,13 @@ other method, and zero real app-server launches, real alias resolutions, real ta
 reads/resumes, real turns, browser operations, MCP operations, automatic loops,
 and posts. Twenty clean reconstructions must be byte-identical. Mutation and crash
 campaigns must have zero unexpected passes.
+
+## Sequence 38 durable route discovery
+
+Sequence 38 adds a discovery-only protocol profile whose outbound methods are exactly `initialize` and `thread/list`. Active and archived pages share the same bounded listing engine and parser used by target-bound delivery. Discovery never calls `thread/read`, `thread/resume`, or `turn/start`.
+
+The foreground operator selects an eligible task by explicit number or aborts with `q`, EOF, timeout, or exhausted corrections. No task identity is accepted from a command-line argument, environment variable, model response, or stored historical route. A valid selection is published into a fresh owner-only route root, registry, and fixed-basename locator using exclusive atomic writes and directory synchronization. The registry remains compatible with the production target-bound resolver.
+
+Inbound responses, client notifications, server notifications, and server requests are counted separately. Only schema-verified, state-free notifications may be ignored before delivery writes; every inbound server request, malformed notification, pagination-integrity defect, or target-relevant inconsistency fails closed. No non-target task metadata is emitted through normal stdout, stderr, exceptions, public evidence, or the sanitized report.
+
+The selected route and exact message are rendered together on the controlling foreground TTY. The subsequent single-use delivery challenge is entered personally by the operator. Discovery cannot infer, answer, copy, or reuse that challenge. Delivery retains its existing exact-target preparation, one-turn ceiling, durable journal, uncertainty boundary, and post-terminal route-digest checks.

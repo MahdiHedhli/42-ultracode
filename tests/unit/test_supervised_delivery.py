@@ -325,15 +325,58 @@ def test_thread_list_pagination_parameters_are_exact(tmp_path: Path) -> None:
         assert {key: item["params"][key] for key in expected_common} == expected_common
 
 
-def test_cursor_cycle_and_transient_sensitive_non_target_fail_privately(tmp_path: Path) -> None:
+def test_cursor_cycle_fails_privately(tmp_path: Path) -> None:
     lines = delivery._fake_transcript().splitlines()
     second_page = json.loads(lines[2])
     second_page["result"]["nextCursor"] = "page-2"
-    second_page["result"]["data"][0]["preview"] = "sk-" + "A" * 32
     lines[2] = delivery._canonical(second_page)
     outcome, _session, written = _run(tmp_path, b"\n".join(lines) + b"\n")
     assert outcome is DeliveryOutcome.FAILED_BEFORE_WRITE
+    assert b'"method":"turn/start"' not in written
+    assert b"synthetic supervised delivery" not in written
+
+
+def test_sensitive_non_target_is_excluded_privately(tmp_path: Path) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    second_page = json.loads(lines[2])
+    second_page["result"]["data"][0]["preview"] = "sk-" + "A" * 32
+    lines[2] = delivery._canonical(second_page)
+    outcome, _session, written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.DELIVERED
     assert b"sk-" not in written
+
+
+def test_prewrite_unrelated_status_is_counted_and_ignored(tmp_path: Path) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    lines.insert(
+        6,
+        delivery._canonical(
+            {
+                "jsonrpc": "2.0",
+                "method": "thread/status/changed",
+                "params": {"status": {"type": "idle"}, "threadId": "unrelated-thread"},
+            }
+        ),
+    )
+    outcome, session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.DELIVERED
+    assert session.inbound_notifications == {"thread/status/changed": 1}
+
+
+def test_post_turn_start_unrelated_status_is_terminal_uncertain(tmp_path: Path) -> None:
+    lines = delivery._fake_transcript().splitlines()
+    lines.insert(
+        7,
+        delivery._canonical(
+            {
+                "jsonrpc": "2.0",
+                "method": "thread/status/changed",
+                "params": {"status": {"type": "idle"}, "threadId": "unrelated-thread"},
+            }
+        ),
+    )
+    outcome, _session, _written = _run(tmp_path, b"\n".join(lines) + b"\n")
+    assert outcome is DeliveryOutcome.UNCERTAIN
 
 
 @pytest.mark.parametrize("backwards", ["", "x" * 1025, 7, False])

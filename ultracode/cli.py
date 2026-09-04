@@ -12,6 +12,7 @@ from typing import cast
 from .controller import Controller, ControllerError
 from .dogfood import run_dogfood
 from .executor import CodexCliExecutor, ExecutorError, execute_one
+from .route_discovery import PILOT_EXIT_CODES, PilotConfig, run_supervised_pilot
 from .supervised_delivery import DeliveryError, DeliveryOutcome, deliver_foreground
 
 
@@ -91,6 +92,19 @@ def _supervised_delivery_command(args: argparse.Namespace) -> int:
     }[outcome]
 
 
+def _supervised_pilot_command(args: argparse.Namespace) -> int:
+    outcome = run_supervised_pilot(
+        PilotConfig(
+            message_path=Path(args.message),
+            locator_basename=args.locator_basename,
+            report_path=Path(args.report),
+            prompt_commit=args.prompt_commit,
+            prompt_sha256=args.prompt_sha256,
+        )
+    )
+    return PILOT_EXIT_CODES[outcome]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ultracode", description="42 Ultracode local controller")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -124,6 +138,16 @@ def build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--route-registry", required=True, help="owner-only route registry")
     delivery.add_argument("--journal", required=True, help="owner-only append journal")
     delivery.set_defaults(handler=_supervised_delivery_command)
+
+    pilot = subcommands.add_parser(
+        "supervised-pilot", help="discover and perform one foreground TTY-confirmed Codex task delivery"
+    )
+    pilot.add_argument("--message", required=True, help="owner-only frozen UTF-8 payload file")
+    pilot.add_argument("--locator-basename", required=True, help="fixed private locator basename")
+    pilot.add_argument("--report", required=True, help="fresh owner-only sanitized result path")
+    pilot.add_argument("--prompt-commit", required=True, help="public prompt commit")
+    pilot.add_argument("--prompt-sha256", required=True, help="public prompt SHA-256")
+    pilot.set_defaults(handler=_supervised_pilot_command)
 
     worker = subcommands.add_parser("worker-once", help="claim and execute one Codex CLI turn")
     worker.add_argument("--database", required=True)
