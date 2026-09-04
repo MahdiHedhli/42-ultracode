@@ -130,3 +130,16 @@ def test_process_cleanup_uses_owned_group_and_bounded_wait() -> None:
     assert "cleanup_end" in source
     assert "process_reap_timeout" in source
     assert "stderr_helper_alive" in source
+
+
+def test_discovery_initialize_has_one_shared_production_path() -> None:
+    delivery_source = Path(inspect.getfile(subject)).read_text(encoding="utf-8")
+    discovery_source = Path(inspect.getfile(discovery)).read_text(encoding="utf-8")
+    assert delivery_source.count("def _open_production_discovery") == 1
+    assert delivery_source.count("def _run_production_initialize_liveness") == 1
+    assert discovery_source.count("_open_production_discovery()") == 1
+    assert "_CodexProcess(" not in discovery_source
+    assert "_JsonlSession(" not in discovery_source
+    assert subject._DISCOVERY_MAX_ATTEMPTS == 5
+    assert subject._INITIALIZE_RESPONSE_SECONDS <= 15
+    assert subject._DISCOVERY_AGGREGATE_SECONDS <= 90

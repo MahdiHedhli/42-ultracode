@@ -16,19 +16,18 @@ from pathlib import Path
 from typing import TextIO
 
 from .supervised_delivery import (
-    DISCOVERY_PROTOCOL_PROFILE,
     DeliveryError,
     DeliveryOutcome,
     ThreadListing,
     ThreadListingEntry,
     _canonical,
-    _CodexProcess,
-    _Deadline,
+    _DiscoveryInitializationError,
+    _InitializeDiagnostic,
+    _InitializeDiagnosticClass,
     _Journal,
     _JsonlSession,
+    _open_production_discovery,
     _read_owned_regular,
-    _require_production_identity,
-    _seal_production_executable,
     _strict_object,
     deliver_foreground,
 )
@@ -43,7 +42,8 @@ __all__ = (
 _ALIAS = "F017_D8_PILOT_TARGET"
 _LOCATOR_BASENAME = "f017-d8-pilot-sequence38.json"
 _SEQUENCE39_LOCATOR_BASENAME = "f017-d8-pilot-sequence39.json"
-_LOCATOR_BASENAMES = frozenset({_LOCATOR_BASENAME, _SEQUENCE39_LOCATOR_BASENAME})
+_SEQUENCE40_LOCATOR_BASENAME = "f017-d8-pilot-sequence40.json"
+_LOCATOR_BASENAMES = frozenset({_LOCATOR_BASENAME, _SEQUENCE39_LOCATOR_BASENAME, _SEQUENCE40_LOCATOR_BASENAME})
 _MESSAGE_SHA256 = "039cf28debcb905e3a94876e9fc938b2964e9ed9df86a61d9a202ee1ad3452d9"
 _MESSAGE_BYTES = 224
 _MAX_SELECTION_SECONDS = 600.0
@@ -303,17 +303,35 @@ def _write_report(
     rejected_entries: int,
     post_guard: str,
     failure_class: str,
+    discovery_attempts: int = 0,
+    transient_retries: int = 0,
+    initialize_diagnostic: _InitializeDiagnostic | None = None,
 ) -> None:
     record = {
+        "discovery_app_server_attempts": discovery_attempts,
+        "discovery_transient_pre_response_retries": transient_retries,
         "eligible_count_bucket": _eligible_bucket(eligible_count),
         "failure_class": failure_class,
+        "initialize_diagnostic": (
+            initialize_diagnostic.to_dict()
+            if initialize_diagnostic is not None
+            else {
+                "bytes_read_bucket": "0",
+                "bytes_written_bucket": "0",
+                "diagnostic_class": _InitializeDiagnosticClass.NONE.value,
+                "elapsed_bucket": "<=1s",
+                "exit_status_class": "NOT_STARTED",
+                "phase": "NOT_REACHED",
+                "retryable": False,
+            }
+        ),
         "list_shown": list_shown,
         "method_counts": _method_counts(session),
         "notification_count": sum(session.inbound_notifications.values()) if session is not None else 0,
         "per_entry_rejection_count": rejected_entries,
         "phase_reached": phase,
         "post_terminal_route_digest_guard": post_guard,
-        "schema": "42-ultracode.d8-supervised-pilot-sanitized/1.0.0",
+        "schema": "42-ultracode.d8-supervised-pilot-sanitized/1.1.0",
         "status": outcome.value,
     }
     _write_exclusive_atomic(path, _canonical(record) + b"\n")
@@ -384,7 +402,11 @@ def _publish_route(entry: ThreadListingEntry, locator_basename: str) -> _RouteFi
     locator = config_root / locator_basename
     if locator.exists() or locator.is_symlink():
         raise FileExistsError(locator_basename)
-    sequence = "sequence39" if locator_basename == _SEQUENCE39_LOCATOR_BASENAME else "sequence38"
+    sequence = {
+        _LOCATOR_BASENAME: "sequence38",
+        _SEQUENCE39_LOCATOR_BASENAME: "sequence39",
+        _SEQUENCE40_LOCATOR_BASENAME: "sequence40",
+    }[locator_basename]
     root = data_root / f"f017-{sequence}-{os.urandom(16).hex()}"
     root.mkdir(mode=0o700)
     _fsync_directory(root.parent)
@@ -492,6 +514,9 @@ def run_supervised_pilot(
     outcome = PilotOutcome.TOOLING_FAILURE_BEFORE_LIST
     failure_class = "PRECHECK"
     post_guard = "NOT_REACHED"
+    discovery_attempts = 0
+    transient_retries = 0
+    initialize_diagnostic: _InitializeDiagnostic | None = None
     try:
         config.validate()
         message = _read_owned_regular(config.message_path, max_bytes=_MESSAGE_BYTES)
@@ -504,27 +529,36 @@ def run_supervised_pilot(
             outcome = PilotOutcome.ROUTE_CONFLICT
             failure_class = "ROUTE_CONFLICT"
             raise FileExistsError(config.locator_basename)
-        authority = _seal_production_executable()
-        identity = _require_production_identity(authority)
         phase = "DISCOVERY"
         with _open_foreground_tty() as (reader, writer, tty_fd, tty_identity):
-            deadline = _Deadline.start(session_seconds=_MAX_SELECTION_SECONDS, operation_seconds=10.0)
-            process = _CodexProcess(authority, deadline)
-            with process as streams:
-                app_reader, app_writer, health_check = streams
-                session = _JsonlSession(
-                    app_reader,
-                    app_writer,
-                    real_operations=True,
-                    deadline=deadline,
-                    health_check=health_check,
-                    expected_user_agent=identity.cli_version,
-                    protocol_profile=DISCOVERY_PROTOCOL_PROFILE,
+            writer.write(
+                "Preparing the eligible Codex task list. No message will be sent before you\n"
+                "select a task and re-enter the confirmation challenge.\n"
+            )
+            writer.flush()
+            try:
+                with _open_production_discovery() as connection:
+                    authority = connection.authority
+                    session = connection.session
+                    discovery_attempts = connection.attempts
+                    transient_retries = len(connection.transient_failures)
+                    listing = session.list_threads()
+            except _DiscoveryInitializationError as error:
+                discovery_attempts = error.attempts
+                initialize_diagnostic = error.diagnostic
+                writer.write(
+                    "Could not prepare the Codex task list. Nothing was sent. Return to Codex for\n"
+                    "the sanitized diagnosis; do not rerun this command.\n"
                 )
-                session.initialize()
-                listing = session.list_threads()
-            if process.cleanup_issue is not None:
-                raise DeliveryError("discovery process cleanup failed")
+                writer.flush()
+                raise
+            except (DeliveryError, OSError, UnicodeError, ValueError):
+                writer.write(
+                    "Could not prepare the Codex task list. Nothing was sent. Return to Codex for\n"
+                    "the sanitized diagnosis; do not rerun this command.\n"
+                )
+                writer.flush()
+                raise
             rejected_entries = listing.rejected_entries
             eligible_count = len(listing.entries)
             phase = "LIST_SHOWN"
@@ -622,5 +656,8 @@ def run_supervised_pilot(
                 rejected_entries=rejected_entries,
                 post_guard=post_guard,
                 failure_class=failure_class,
+                discovery_attempts=discovery_attempts,
+                transient_retries=transient_retries,
+                initialize_diagnostic=initialize_diagnostic,
             )
     return outcome

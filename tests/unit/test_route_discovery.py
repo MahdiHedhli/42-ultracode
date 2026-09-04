@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -344,7 +345,13 @@ def test_sequence39_locator_is_closed_and_uses_fresh_route_namespace(
     assert files.locator.name == config.locator_basename
     discovery._revalidate_route(files)
 
-    for rejected in ("f017-d8-pilot-sequence37.json", "f017-d8-pilot-sequence40.json", "../sequence39.json"):
+    sequence40 = replace(config, locator_basename="f017-d8-pilot-sequence40.json")
+    sequence40.validate()
+    files40 = discovery._publish_route(entry, sequence40.locator_basename)
+    assert files40.root.name.startswith("f017-sequence40-")
+    discovery._revalidate_route(files40)
+
+    for rejected in ("f017-d8-pilot-sequence37.json", "f017-d8-pilot-sequence41.json", "../sequence39.json"):
         with pytest.raises(delivery.DeliveryError, match="not authorized"):
             discovery.PilotConfig(
                 message_path=tmp_path / "message.txt",
@@ -410,7 +417,6 @@ def test_listing_field_mutations_are_rejected(field: str, value: object) -> None
     "mutation",
     [
         "unknown_method",
-        "missing_jsonrpc",
         "wrong_jsonrpc",
         "missing_params",
         "extra_field",
@@ -466,6 +472,15 @@ def test_notification_mutations_fail_closed(mutation: str) -> None:
         session._accept_interleaved_notification(message, allow_unrelated_status=True)
 
 
+def test_current_notification_envelope_without_jsonrpc_is_accepted() -> None:
+    session, _writer = _session()
+    session._accept_interleaved_notification(
+        {"method": "thread/status/changed", "params": {"status": {"type": "idle"}, "threadId": "other"}},
+        allow_unrelated_status=True,
+    )
+    assert session.inbound_notifications == {"thread/status/changed": 1}
+
+
 def test_sanitized_report_is_closed_and_contains_no_task_data(tmp_path: Path) -> None:
     report = tmp_path / "report.json"
     discovery._write_report(
@@ -481,8 +496,11 @@ def test_sanitized_report_is_closed_and_contains_no_task_data(tmp_path: Path) ->
     )
     data = json.loads(report.read_text())
     assert set(data) == {
+        "discovery_app_server_attempts",
+        "discovery_transient_pre_response_retries",
         "eligible_count_bucket",
         "failure_class",
+        "initialize_diagnostic",
         "list_shown",
         "method_counts",
         "notification_count",
@@ -494,6 +512,15 @@ def test_sanitized_report_is_closed_and_contains_no_task_data(tmp_path: Path) ->
     }
     assert stat_mode(report) == 0o600
     assert "synthetic-thread" not in report.read_text()
+
+
+def test_sequence40_uses_shared_production_discovery_path() -> None:
+    source = inspect.getsource(discovery.run_supervised_pilot)
+    assert "_open_production_discovery" in source
+    assert "_CodexProcess" not in source
+    assert "_JsonlSession(" not in source
+    assert "Preparing the eligible Codex task list" in source
+    assert "Could not prepare the Codex task list" in source
 
 
 def test_pilot_exit_codes_are_unique() -> None:

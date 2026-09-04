@@ -17,7 +17,8 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
@@ -57,11 +58,16 @@ _DEFAULT_SESSION_SECONDS = 60.0
 _DEFAULT_OPERATION_SECONDS = 5.0
 _CLEANUP_TAIL_SECONDS = 0.5
 _CLEANUP_SECONDS = 3.0
+_DISCOVERY_AGGREGATE_SECONDS = 90.0
+_INITIALIZE_RESPONSE_SECONDS = 15.0
+_DISCOVERY_MAX_ATTEMPTS = 5
+_DISCOVERY_BACKOFF_SECONDS = (0.1, 0.2, 0.4, 0.8)
 _SYMBOL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 _EXPECTED_CODEX_AUTHORITY = "Developer ID Application: OpenAI OpCo, LLC (2DC432GLL2)"
 _EXPECTED_CODEX_TEAM_ID = "2DC432GLL2"
 _SYNTHETIC_USER_AGENT = "codex-cli synthetic"
 _CODEX_CLI_VERSION = re.compile(r"codex-cli [0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?\Z")
+_CODEX_USER_AGENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ./_()+;-]{0,127}\Z")
 _CODEX_APP_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)+\Z")
 _CODEX_APP_BUILD = re.compile(r"[1-9][0-9]*\Z")
 _QUALIFICATION_RESULT = "D8_SUPERVISED_DELIVERY_STABLE_ELIGIBILITY_RESULT: PASS_PENDING_PLANNER_REVIEW"
@@ -81,6 +87,22 @@ class DeliveryOutcome(StrEnum):
     DELIVERED = "DELIVERED"
     FAILED_BEFORE_WRITE = "FAILED_BEFORE_WRITE"
     UNCERTAIN = "UNCERTAIN"
+
+
+class _InitializeDiagnosticClass(StrEnum):
+    NONE = "NONE"
+    EXECUTABLE_VALIDATION = "EXECUTABLE_VALIDATION"
+    SPAWN = "SPAWN"
+    PROCESS_GROUP_VALIDATION = "PROCESS_GROUP_VALIDATION"
+    STDIN_WRITE = "STDIN_WRITE"
+    INITIALIZE_RESPONSE_TIMEOUT = "INITIALIZE_RESPONSE_TIMEOUT"
+    EARLY_EOF = "EARLY_EOF"
+    NONZERO_EARLY_EXIT = "NONZERO_EARLY_EXIT"
+    REJECTED_STDERR = "REJECTED_STDERR"
+    RESPONSE_SHAPE_IDENTITY = "RESPONSE_SHAPE_IDENTITY"
+    INITIALIZED_NOTIFICATION = "INITIALIZED_NOTIFICATION"
+    CLEANUP = "CLEANUP"
+    INTERNAL = "INTERNAL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +184,49 @@ def _canonical(value: object) -> bytes:
 
 def _sha(value: bytes) -> str:
     return sha256(value).hexdigest()
+
+
+def _closed_protocol_envelope(message: Mapping[str, object], required: frozenset[str]) -> bool:
+    """Accept only the current Codex envelope or its explicit JSON-RPC predecessor."""
+    fields = frozenset(message)
+    if fields == required:
+        return True
+    return fields == required | {"jsonrpc"} and message.get("jsonrpc") == "2.0"
+
+
+def _byte_bucket(value: int) -> str:
+    if value == 0:
+        return "0"
+    if value <= 1024:
+        return "1-1024"
+    if value <= 65536:
+        return "1025-65536"
+    return "65537+"
+
+
+def _elapsed_bucket(seconds: float) -> str:
+    if seconds <= 1.0:
+        return "<=1s"
+    if seconds <= 5.0:
+        return "<=5s"
+    if seconds <= 15.0:
+        return "<=15s"
+    if seconds <= 30.0:
+        return "<=30s"
+    if seconds <= 90.0:
+        return "<=90s"
+    return ">90s"
+
+
+def _matches_expected_user_agent(value: object, expected_cli_version: str) -> bool:
+    if expected_cli_version == _SYNTHETIC_USER_AGENT:
+        return value == expected_cli_version
+    if type(value) is not str or _CODEX_USER_AGENT.fullmatch(value) is None:
+        return False
+    if _CODEX_CLI_VERSION.fullmatch(expected_cli_version) is None:
+        return False
+    version = expected_cli_version.removeprefix("codex-cli ")
+    return value.startswith("42-ultracode/") and value.count("0.1.0") == 1 and value.count(version) == 1
 
 
 def _symbol(value: str, field: str) -> str:
@@ -950,6 +1015,9 @@ class _JsonlSession:
         self.inbound_responses = 0
         self.inbound_server_requests = 0
         self.inbound_notifications: dict[str, int] = {}
+        self.initialize_response_observed = False
+        self.transport_bytes_read = 0
+        self.transport_bytes_written = 0
 
     def _write(self, message: Mapping[str, object]) -> None:
         line = _canonical(dict(message)) + b"\n"
@@ -962,6 +1030,7 @@ class _JsonlSession:
                 raise DeliveryError("transport write was partial") from None
             self._writer.flush()
             self._deadline.check("transport write")
+            self.transport_bytes_written += len(line)
             return
         view = memoryview(line)
         while view:
@@ -974,6 +1043,7 @@ class _JsonlSession:
                 raise DeliveryError("transport write was partial")
             view = view[written:]
         self._health_check()
+        self.transport_bytes_written += len(line)
 
     def _read(self) -> dict[str, object]:
         self._health_check()
@@ -1002,6 +1072,7 @@ class _JsonlSession:
         if not line or len(line) > _MAX_LINE_BYTES or not line.endswith(b"\n"):
             raise DeliveryError("transport response is missing, partial, or oversized")
         self._health_check()
+        self.transport_bytes_read += len(line)
         return _strict_object(line[:-1], label="transport response")
 
     def _request(self, method: str, params: Mapping[str, object]) -> dict[str, object]:
@@ -1035,9 +1106,14 @@ class _JsonlSession:
                 allow_unrelated_status=method != "turn/start" and not self._turn_request_written,
             )
             response = self._read()
-        if set(response) not in ({"id", "jsonrpc", "result"}, {"error", "id", "jsonrpc"}):
+        if method == "initialize":
+            self.initialize_response_observed = True
+        if not (
+            _closed_protocol_envelope(response, frozenset({"id", "result"}))
+            or _closed_protocol_envelope(response, frozenset({"error", "id"}))
+        ):
             raise DeliveryError("response violates the closed JSON-RPC shape")
-        if response.get("jsonrpc") != "2.0" or response.get("id") != request_id:
+        if response.get("id") != request_id:
             raise DeliveryError("response identity mismatch")
         if "error" in response:
             raise DeliveryError("app-server returned an error response")
@@ -1079,7 +1155,7 @@ class _JsonlSession:
         if "id" in message:
             self.inbound_server_requests += 1
             raise DeliveryError("inbound server requests are prohibited")
-        if set(message) != {"jsonrpc", "method", "params"} or message.get("jsonrpc") != "2.0":
+        if not _closed_protocol_envelope(message, frozenset({"method", "params"})):
             raise DeliveryError("status notification violates JSON-RPC")
         method = message.get("method")
         if type(method) is not str or method not in self._protocol_profile.server_notifications:
@@ -1406,7 +1482,7 @@ class _JsonlSession:
             raise DeliveryError("initialize response violates the selected schema")
         if any(type(initialized[key]) is not str for key in initialized):
             raise DeliveryError("initialize response types violate the selected schema")
-        if initialized["userAgent"] != self._expected_user_agent:
+        if not _matches_expected_user_agent(initialized["userAgent"], self._expected_user_agent):
             raise DeliveryError("app-server version does not match the sealed run-local identity")
         self._notify("initialized", {})
 
@@ -1479,7 +1555,7 @@ class _JsonlSession:
             message_obj = self._read()
             if "id" in message_obj:
                 raise DeliveryError("duplicate or unsolicited response is prohibited")
-            if set(message_obj) != {"jsonrpc", "method", "params"} or message_obj.get("jsonrpc") != "2.0":
+            if not _closed_protocol_envelope(message_obj, frozenset({"method", "params"})):
                 raise DeliveryError("server notification violates the closed JSON-RPC shape")
             method = message_obj.get("method")
             if type(method) is not str or method not in PROTOCOL_PROFILE.server_notifications:
@@ -1580,6 +1656,8 @@ class _CodexProcess:
         self.cleanup_issue: str | None = None
         self.cleanup_actions: list[str] = []
         self._stderr_thread_baseline = _stderr_thread_census()
+        self.launched = False
+        self.exit_status_class = "NOT_STARTED"
 
     def __enter__(self) -> tuple[BinaryIO, BinaryIO, Callable[[], None]]:
         executable = _validate_executable(self._authority)
@@ -1594,6 +1672,8 @@ class _CodexProcess:
             env=_minimal_environment(),
             start_new_session=True,
         )
+        self.launched = True
+        self.exit_status_class = "RUNNING"
         self._process_group_id = self._process.pid
         try:
             try:
@@ -1623,6 +1703,10 @@ class _CodexProcess:
             self._stderr.check()
         if self._process is not None:
             status = self._process.poll()
+            if status == 0:
+                self.exit_status_class = "EXIT_ZERO"
+            elif status is not None:
+                self.exit_status_class = "EXIT_NONZERO"
             if status is not None and status != 0:
                 raise DeliveryError("app-server exited before protocol completion")
 
@@ -1778,10 +1862,229 @@ class _CodexProcess:
         except Exception:
             issues.add("cleanup_internal_failure")
         finally:
+            try:
+                status = self._process.poll()
+                if status == 0:
+                    self.exit_status_class = "EXIT_ZERO"
+                elif status is not None:
+                    self.exit_status_class = "EXIT_NONZERO"
+                else:
+                    self.exit_status_class = "STILL_RUNNING"
+            except OSError:
+                self.exit_status_class = "STATUS_UNAVAILABLE"
             self.cleanup_issue = "+".join(sorted(issues)) if issues else None
             self._stderr = None
             self._process_group_id = None
             self._process = None
+
+
+@dataclass(frozen=True, slots=True)
+class _InitializeDiagnostic:
+    diagnostic_class: _InitializeDiagnosticClass
+    phase: str
+    elapsed_bucket: str
+    bytes_read_bucket: str
+    bytes_written_bucket: str
+    exit_status_class: str
+    retryable: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "bytes_read_bucket": self.bytes_read_bucket,
+            "bytes_written_bucket": self.bytes_written_bucket,
+            "diagnostic_class": self.diagnostic_class.value,
+            "elapsed_bucket": self.elapsed_bucket,
+            "exit_status_class": self.exit_status_class,
+            "phase": self.phase,
+            "retryable": self.retryable,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _InitializedDiscovery:
+    authority: object
+    identity: _DesktopIdentity
+    session: _JsonlSession
+    counters: _OperationCounters
+    attempts: int
+    transient_failures: tuple[_InitializeDiagnostic, ...]
+
+
+class _DiscoveryInitializationError(DeliveryError):
+    def __init__(self, diagnostic: _InitializeDiagnostic, attempts: int) -> None:
+        super().__init__("discovery initialization failed closed")
+        self.diagnostic = diagnostic
+        self.attempts = attempts
+
+
+def _classify_initialize_failure(
+    error: BaseException,
+    *,
+    process: _CodexProcess,
+    session: _JsonlSession | None,
+    started: float,
+) -> _InitializeDiagnostic:
+    message = str(error)
+    if process.cleanup_issue is not None:
+        diagnostic_class = _InitializeDiagnosticClass.CLEANUP
+    elif isinstance(error, OSError) and not process.launched:
+        diagnostic_class = _InitializeDiagnosticClass.SPAWN
+    elif "executable" in message or "Codex Desktop identity" in message:
+        diagnostic_class = _InitializeDiagnosticClass.EXECUTABLE_VALIDATION
+    elif "process-group" in message or "owned process group" in message:
+        diagnostic_class = _InitializeDiagnosticClass.PROCESS_GROUP_VALIDATION
+    elif "transport write" in message:
+        diagnostic_class = _InitializeDiagnosticClass.STDIN_WRITE
+    elif "transport read deadline" in message or "session deadline" in message:
+        diagnostic_class = _InitializeDiagnosticClass.INITIALIZE_RESPONSE_TIMEOUT
+    elif "missing, partial, or oversized" in message:
+        diagnostic_class = _InitializeDiagnosticClass.EARLY_EOF
+    elif "exited before protocol completion" in message:
+        diagnostic_class = _InitializeDiagnosticClass.NONZERO_EARLY_EXIT
+    elif "stderr rejected" in message:
+        diagnostic_class = _InitializeDiagnosticClass.REJECTED_STDERR
+    elif "notification" in message and session is not None and session.initialize_response_observed:
+        diagnostic_class = _InitializeDiagnosticClass.INITIALIZED_NOTIFICATION
+    elif any(
+        token in message for token in ("response", "JSON", "structural bound", "invalid key", "version does not match")
+    ):
+        diagnostic_class = _InitializeDiagnosticClass.RESPONSE_SHAPE_IDENTITY
+    else:
+        diagnostic_class = _InitializeDiagnosticClass.INTERNAL
+    response_observed = session is not None and session.initialize_response_observed
+    retryable = (
+        not response_observed
+        and process.cleanup_issue is None
+        and diagnostic_class
+        in {
+            _InitializeDiagnosticClass.SPAWN,
+            _InitializeDiagnosticClass.STDIN_WRITE,
+            _InitializeDiagnosticClass.INITIALIZE_RESPONSE_TIMEOUT,
+            _InitializeDiagnosticClass.EARLY_EOF,
+            _InitializeDiagnosticClass.NONZERO_EARLY_EXIT,
+        }
+    )
+    return _InitializeDiagnostic(
+        diagnostic_class=diagnostic_class,
+        phase="INITIALIZE",
+        elapsed_bucket=_elapsed_bucket(time.monotonic() - started),
+        bytes_read_bucket=_byte_bucket(session.transport_bytes_read if session is not None else 0),
+        bytes_written_bucket=_byte_bucket(session.transport_bytes_written if session is not None else 0),
+        exit_status_class=process.exit_status_class,
+        retryable=retryable,
+    )
+
+
+@contextmanager
+def _open_initialized_discovery(
+    authority: object,
+    identity: _DesktopIdentity,
+    *,
+    max_attempts: int = _DISCOVERY_MAX_ATTEMPTS,
+) -> Iterator[_InitializedDiscovery]:
+    """Own the single discovery initialize path, including bounded pre-response attempts."""
+    if not 1 <= max_attempts <= _DISCOVERY_MAX_ATTEMPTS:
+        raise DeliveryError("discovery attempt count violates the closed bound")
+    aggregate_end = time.monotonic() + _DISCOVERY_AGGREGATE_SECONDS
+    transient_failures: list[_InitializeDiagnostic] = []
+    for attempt in range(1, max_attempts + 1):
+        latest_start = aggregate_end - _CLEANUP_SECONDS
+        if time.monotonic() >= latest_start:
+            diagnostic = _InitializeDiagnostic(
+                _InitializeDiagnosticClass.INITIALIZE_RESPONSE_TIMEOUT,
+                "INITIALIZE",
+                "<=90s",
+                "0",
+                "0",
+                "NOT_STARTED",
+                False,
+            )
+            raise _DiscoveryInitializationError(diagnostic, attempt - 1)
+        deadline = _Deadline(latest_start, _INITIALIZE_RESPONSE_SECONDS)
+        counters = _OperationCounters(real_app_server_launches=1)
+        process = _CodexProcess(authority, deadline)
+        session: _JsonlSession | None = None
+        initialized = False
+        started = time.monotonic()
+        try:
+            with process as streams:
+                reader, writer, health_check = streams
+                session = _JsonlSession(
+                    reader,
+                    writer,
+                    real_operations=True,
+                    counters=counters,
+                    deadline=deadline,
+                    health_check=health_check,
+                    expected_user_agent=identity.cli_version,
+                    protocol_profile=DISCOVERY_PROTOCOL_PROFILE,
+                )
+                session.initialize()
+                initialized = True
+                yield _InitializedDiscovery(
+                    authority,
+                    identity,
+                    session,
+                    counters,
+                    attempt,
+                    tuple(transient_failures),
+                )
+            if process.cleanup_issue is not None:
+                raise DeliveryError("discovery process cleanup failed")
+            return
+        except (DeliveryError, OSError) as error:
+            if initialized:
+                raise
+            diagnostic = _classify_initialize_failure(error, process=process, session=session, started=started)
+            if not diagnostic.retryable or attempt == max_attempts:
+                raise _DiscoveryInitializationError(diagnostic, attempt) from error
+            transient_failures.append(diagnostic)
+            delay = _DISCOVERY_BACKOFF_SECONDS[attempt - 1]
+            if time.monotonic() + delay >= latest_start:
+                raise _DiscoveryInitializationError(diagnostic, attempt) from error
+            time.sleep(delay)
+    raise DeliveryError("discovery attempt loop exhausted unexpectedly")  # pragma: no cover
+
+
+@contextmanager
+def _open_production_discovery(*, max_attempts: int = _DISCOVERY_MAX_ATTEMPTS) -> Iterator[_InitializedDiscovery]:
+    """Seal identity and enter the only production discovery initialize path."""
+    try:
+        authority = _seal_production_executable()
+        identity = _require_production_identity(authority)
+    except (DeliveryError, OSError) as error:
+        diagnostic = _InitializeDiagnostic(
+            _InitializeDiagnosticClass.EXECUTABLE_VALIDATION,
+            "EXECUTABLE_VALIDATION",
+            "<=1s",
+            "0",
+            "0",
+            "NOT_STARTED",
+            False,
+        )
+        raise _DiscoveryInitializationError(diagnostic, 0) from error
+    with _open_initialized_discovery(authority, identity, max_attempts=max_attempts) as connection:
+        yield connection
+
+
+def _run_production_initialize_liveness() -> dict[str, object]:
+    """Exercise initialize/initialized only through the exact ceremony discovery path."""
+    with _open_production_discovery(max_attempts=1) as connection:
+        session = connection.session
+        if session.methods != ["initialize"] or session.notifications != ["initialized"]:
+            raise DeliveryError("initialize liveness exceeded the closed protocol")
+        counters = connection.counters.to_dict()
+        if any(counters[key] for key in ("posts", "real_task_reads", "real_task_resumes", "real_turns")):
+            raise DeliveryError("initialize liveness performed a task operation")
+        return {
+            "attempts": connection.attempts,
+            "diagnostic_class": _InitializeDiagnosticClass.NONE.value,
+            "methods": tuple(session.methods),
+            "notifications": tuple(session.notifications),
+            "task_operations": 0,
+            "thread_list_writes": 0,
+            "transient_failures": tuple(item.to_dict() for item in connection.transient_failures),
+        }
 
 
 def _perform(

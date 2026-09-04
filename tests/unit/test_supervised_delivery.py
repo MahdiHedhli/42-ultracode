@@ -13,6 +13,7 @@ import threading
 import time
 from argparse import Namespace
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -84,6 +85,178 @@ def test_protocol_profile_and_fixed_process_boundary() -> None:
         "error",
     }
     assert "experimental" not in " ".join(delivery.APP_SERVER_ARGV)
+
+
+def test_current_codex_response_envelope_without_jsonrpc_is_accepted(tmp_path: Path) -> None:
+    transcript = (
+        b"\n".join(
+            delivery._canonical({key: value for key, value in json.loads(line).items() if key != "jsonrpc"})
+            for line in delivery._fake_transcript().splitlines()
+        )
+        + b"\n"
+    )
+    outcome, session, _written = _run(tmp_path, transcript)
+    assert outcome is DeliveryOutcome.DELIVERED
+    assert session.inbound_responses == 8
+
+
+def test_protocol_envelope_rejects_wrong_version_and_extra_fields() -> None:
+    required = frozenset({"id", "result"})
+    assert delivery._closed_protocol_envelope({"id": 1, "result": {}}, required)
+    assert delivery._closed_protocol_envelope({"id": 1, "jsonrpc": "2.0", "result": {}}, required)
+    assert not delivery._closed_protocol_envelope({"id": 1, "jsonrpc": "1.0", "result": {}}, required)
+    assert not delivery._closed_protocol_envelope({"extra": True, "id": 1, "result": {}}, required)
+
+
+def test_run_local_user_agent_binds_client_and_signed_cli_version() -> None:
+    expected = "codex-cli 0.153.1"
+    assert delivery._matches_expected_user_agent("42-ultracode/0.1.0 codex-cli/0.153.1", expected)
+    assert delivery._matches_expected_user_agent("42-ultracode/0.1.0 (macos) codex-cli/0.153.1", expected)
+    for rejected in (
+        "other/0.1.0 codex-cli/0.153.1",
+        "42-ultracode/0.1.0 codex-cli/0.153.2",
+        "42-ultracode/0.1.0 codex-cli/0.153.1\n",
+        "42-ultracode/0.1.0 codex-cli/0.153.1 0.153.1",
+    ):
+        assert not delivery._matches_expected_user_agent(rejected, expected)
+
+
+class _DiscoveryAttemptProcess:
+    instances: ClassVar[list[_DiscoveryAttemptProcess]] = []
+
+    def __init__(self, _authority: object, _deadline: delivery._Deadline) -> None:
+        if self.instances:
+            assert self.instances[-1].closed
+        self.cleanup_issue: str | None = None
+        self.launched = True
+        self.exit_status_class = "RUNNING"
+        self.closed = False
+        self.instances.append(self)
+
+    def __enter__(self) -> tuple[io.BytesIO, io.BytesIO, object]:
+        return io.BytesIO(), io.BytesIO(), lambda: None
+
+    def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+        self.closed = True
+        self.exit_status_class = "EXIT_ZERO"
+
+
+class _DiscoveryAttemptSession:
+    outcomes: ClassVar[list[str]] = []
+    instances: ClassVar[list[_DiscoveryAttemptSession]] = []
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        self.initialize_response_observed = False
+        self.transport_bytes_read = 0
+        self.transport_bytes_written = 64
+        self.methods: list[str] = []
+        self.notifications: list[str] = []
+        self.inbound_responses = 0
+        self.inbound_server_requests = 0
+        self.inbound_notifications: dict[str, int] = {}
+        self.instances.append(self)
+
+    def initialize(self) -> None:
+        self.methods.append("initialize")
+        outcome = self.outcomes.pop(0)
+        if outcome == "pass":
+            self.initialize_response_observed = True
+            self.inbound_responses = 1
+            self.notifications.append("initialized")
+            return
+        if outcome == "response":
+            self.initialize_response_observed = True
+            self.transport_bytes_read = 64
+            raise DeliveryError("response violates the closed JSON-RPC shape")
+        if outcome == "stderr":
+            raise DeliveryError("app-server stderr rejected: stderr_sensitive_pattern")
+        if outcome == "group":
+            raise DeliveryError("app-server did not establish the owned process group")
+        if outcome == "eof":
+            raise DeliveryError("transport response is missing, partial, or oversized")
+        raise DeliveryError("transport read deadline expired")
+
+
+def _synthetic_identity() -> delivery._DesktopIdentity:
+    return delivery._DesktopIdentity(
+        delivery._SYNTHETIC_USER_AGENT,
+        delivery._EXPECTED_CODEX_AUTHORITY,
+        delivery._EXPECTED_CODEX_TEAM_ID,
+        "1.0.0",
+        "1",
+    )
+
+
+def _install_discovery_attempt_fakes(monkeypatch: pytest.MonkeyPatch, outcomes: list[str]) -> list[float]:
+    _DiscoveryAttemptProcess.instances = []
+    _DiscoveryAttemptSession.instances = []
+    _DiscoveryAttemptSession.outcomes = list(outcomes)
+    sleeps: list[float] = []
+    monkeypatch.setattr(delivery, "_CodexProcess", _DiscoveryAttemptProcess)
+    monkeypatch.setattr(delivery, "_JsonlSession", _DiscoveryAttemptSession)
+    monkeypatch.setattr(delivery.time, "sleep", sleeps.append)
+    return sleeps
+
+
+def test_discovery_attempt_loop_reaps_before_fresh_transient_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps = _install_discovery_attempt_fakes(monkeypatch, ["timeout", "eof", "pass"])
+    with delivery._open_initialized_discovery(object(), _synthetic_identity()) as connection:
+        assert connection.attempts == 3
+        assert len(connection.transient_failures) == 2
+    assert len(_DiscoveryAttemptProcess.instances) == 3
+    assert all(process.closed for process in _DiscoveryAttemptProcess.instances)
+    assert len({id(session) for session in _DiscoveryAttemptSession.instances}) == 3
+    assert sleeps == [0.1, 0.2]
+
+
+@pytest.mark.parametrize("outcome", ["response", "stderr", "group"])
+def test_discovery_attempt_loop_never_retries_nonretryable_failure(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    sleeps = _install_discovery_attempt_fakes(monkeypatch, [outcome, "pass"])
+    with (
+        pytest.raises(delivery._DiscoveryInitializationError) as captured,
+        delivery._open_initialized_discovery(object(), _synthetic_identity()),
+    ):
+        pass
+    assert captured.value.attempts == 1
+    assert not captured.value.diagnostic.retryable
+    assert len(_DiscoveryAttemptProcess.instances) == 1
+    assert sleeps == []
+
+
+def test_discovery_attempt_loop_stops_at_five(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps = _install_discovery_attempt_fakes(monkeypatch, ["timeout"] * 5)
+    with (
+        pytest.raises(delivery._DiscoveryInitializationError) as captured,
+        delivery._open_initialized_discovery(object(), _synthetic_identity()),
+    ):
+        pass
+    assert captured.value.attempts == 5
+    assert len(_DiscoveryAttemptProcess.instances) == 5
+    assert all(process.closed for process in _DiscoveryAttemptProcess.instances)
+    assert sleeps == [0.1, 0.2, 0.4, 0.8]
+
+
+def test_initialize_diagnostic_contains_only_closed_sanitized_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_discovery_attempt_fakes(monkeypatch, ["stderr"])
+    with (
+        pytest.raises(delivery._DiscoveryInitializationError) as captured,
+        delivery._open_initialized_discovery(object(), _synthetic_identity()),
+    ):
+        pass
+    record = captured.value.diagnostic.to_dict()
+    assert set(record) == {
+        "bytes_read_bucket",
+        "bytes_written_bucket",
+        "diagnostic_class",
+        "elapsed_bucket",
+        "exit_status_class",
+        "phase",
+        "retryable",
+    }
+    assert record["diagnostic_class"] == "REJECTED_STDERR"
+    assert "stderr_sensitive_pattern" not in json.dumps(record)
 
 
 def test_twenty_deterministic_fake_peer_reconstructions(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

@@ -79,3 +79,13 @@ The foreground operator selects an eligible task by explicit number or aborts wi
 Inbound responses, client notifications, server notifications, and server requests are counted separately. Only schema-verified, state-free notifications may be ignored before delivery writes; every inbound server request, malformed notification, pagination-integrity defect, or target-relevant inconsistency fails closed. No non-target task metadata is emitted through normal stdout, stderr, exceptions, public evidence, or the sanitized report.
 
 The selected route and exact message are rendered together on the controlling foreground TTY. The subsequent single-use delivery challenge is entered personally by the operator. Discovery cannot infer, answer, copy, or reuse that challenge. Delivery retains its existing exact-target preparation, one-turn ceiling, durable journal, uncertainty boundary, and post-terminal route-digest checks.
+
+## Sequence 40 discovery transport equivalence
+
+Sequence 40 uses one source-defined production discovery path for both initialize-only liveness qualification and foreground task discovery. That path owns executable validation, the fixed stdio app-server process, process-group cleanup, the JSONL session, `initialize`, and the `initialized` notification. No alternate direct-process liveness path is accepted.
+
+The run-local Codex protocol accepts exactly the current response/notification envelope and the explicit legacy JSON-RPC 2.0 envelope. Omitting `jsonrpc` is accepted only when every remaining field exactly matches the closed envelope; an incorrect version or any extra field fails closed. Requests remain fixed JSON-RPC 2.0 messages.
+
+Before any initialize response, the shared path permits at most five fresh attempts within ninety seconds. Only spawn, bounded write, timeout, early EOF, or nonzero early-exit classes may be retried; each failed process tree is reaped before deterministic backoff. Executable, process-group, sensitive-stderr, response, notification, and cleanup failures are nonretryable. No retry is possible after an initialize response is observed. Diagnostics contain only a closed class and phase, bounded elapsed/read/write buckets, exit-status class, and retryability.
+
+The Sequence 40 locator basename is separately allowlisted and creates a fresh Sequence 40 route namespace. Foreground discovery prints a preparation notice before process launch and a fixed no-send failure notice if the numbered list cannot be prepared. Route publication remains impossible before explicit numbered selection.
