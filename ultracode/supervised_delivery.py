@@ -1181,10 +1181,12 @@ class _JsonlSession:
             "forkedFromId",
             "gitInfo",
             "historyMode",
+            "model",
             "name",
             "parentThreadId",
             "path",
             "recencyAt",
+            "reasoningEffort",
             "section",
             "sectionEnteredAt",
         }
@@ -1216,6 +1218,22 @@ class _JsonlSession:
         )
         if any(key in thread and thread[key] is not None and type(thread[key]) is not str for key in nullable_strings):
             raise DeliveryError("thread optional string violates the selected schema")
+        if (
+            "model" in thread
+            and thread["model"] is not None
+            and (type(thread["model"]) is not str or len(thread["model"]) > 4096)
+        ):
+            raise DeliveryError("thread model violates the selected schema")
+        if (
+            "reasoningEffort" in thread
+            and thread["reasoningEffort"] is not None
+            and (
+                type(thread["reasoningEffort"]) is not str
+                or not thread["reasoningEffort"]
+                or len(thread["reasoningEffort"]) > 256
+            )
+        ):
+            raise DeliveryError("thread reasoning effort violates the selected schema")
         if "recencyAt" in thread and thread["recencyAt"] is not None and type(thread["recencyAt"]) is not int:
             raise DeliveryError("thread recency violates the selected schema")
         if "historyMode" in thread:

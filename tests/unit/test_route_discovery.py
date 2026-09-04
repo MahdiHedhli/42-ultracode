@@ -258,6 +258,16 @@ def test_ephemeral_presence_tracks_verified_schema() -> None:
         delivery._JsonlSession._thread_entry(thread, ephemeral_field_required=False)
 
 
+def test_optional_model_fields_are_validated_but_not_exposed() -> None:
+    thread = json.loads(delivery._fake_transcript().splitlines()[1])["result"]["data"][0]
+    thread["model"] = "synthetic-model"
+    thread["reasoningEffort"] = "high"
+    entry = delivery._JsonlSession._thread_entry(thread, ephemeral_field_required=True)
+    assert entry.thread_id == "synthetic-thread"
+    assert not hasattr(entry, "model")
+    assert not hasattr(entry, "reasoning_effort")
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -315,6 +325,36 @@ def test_route_publication_is_owner_only_and_resolver_compatible(
         discovery._publish_route(entry, "f017-d8-pilot-sequence38.json")
 
 
+def test_sequence39_locator_is_closed_and_uses_fresh_route_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(discovery, "_configuration_root", lambda: tmp_path / "config")
+    monkeypatch.setattr(discovery, "_data_root", lambda: tmp_path / "data")
+    config = discovery.PilotConfig(
+        message_path=tmp_path / "message.txt",
+        locator_basename="f017-d8-pilot-sequence39.json",
+        report_path=tmp_path / "report.json",
+        prompt_commit="1" * 40,
+        prompt_sha256="2" * 64,
+    )
+    config.validate()
+    entry = delivery.ThreadListingEntry("synthetic-thread", "appServer", "/synthetic/workspace", "idle", None, "x")
+    files = discovery._publish_route(entry, config.locator_basename)
+    assert files.root.name.startswith("f017-sequence39-")
+    assert files.locator.name == config.locator_basename
+    discovery._revalidate_route(files)
+
+    for rejected in ("f017-d8-pilot-sequence37.json", "f017-d8-pilot-sequence40.json", "../sequence39.json"):
+        with pytest.raises(delivery.DeliveryError, match="not authorized"):
+            discovery.PilotConfig(
+                message_path=tmp_path / "message.txt",
+                locator_basename=rejected,
+                report_path=tmp_path / "report.json",
+                prompt_commit="1" * 40,
+                prompt_sha256="2" * 64,
+            ).validate()
+
+
 def stat_mode(path: Path) -> int:
     return os.stat(path, follow_symlinks=False).st_mode & 0o777
 
@@ -345,6 +385,9 @@ def stat_mode(path: Path) -> int:
         ("recencyAt", "1"),
         ("name", 3),
         ("modelProvider", []),
+        ("model", []),
+        ("reasoningEffort", []),
+        ("reasoningEffort", ""),
         ("sessionId", {}),
         ("cliVersion", None),
         ("threadSource", 4),

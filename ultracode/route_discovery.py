@@ -42,6 +42,8 @@ __all__ = (
 
 _ALIAS = "F017_D8_PILOT_TARGET"
 _LOCATOR_BASENAME = "f017-d8-pilot-sequence38.json"
+_SEQUENCE39_LOCATOR_BASENAME = "f017-d8-pilot-sequence39.json"
+_LOCATOR_BASENAMES = frozenset({_LOCATOR_BASENAME, _SEQUENCE39_LOCATOR_BASENAME})
 _MESSAGE_SHA256 = "039cf28debcb905e3a94876e9fc938b2964e9ed9df86a61d9a202ee1ad3452d9"
 _MESSAGE_BYTES = 224
 _MAX_SELECTION_SECONDS = 600.0
@@ -85,7 +87,7 @@ class PilotConfig:
     prompt_sha256: str
 
     def validate(self) -> None:
-        if self.locator_basename != _LOCATOR_BASENAME:
+        if self.locator_basename not in _LOCATOR_BASENAMES:
             raise DeliveryError("pilot locator basename is not authorized")
         if len(self.prompt_commit) != 40 or any(c not in "0123456789abcdef" for c in self.prompt_commit):
             raise DeliveryError("pilot prompt commit is invalid")
@@ -382,7 +384,8 @@ def _publish_route(entry: ThreadListingEntry, locator_basename: str) -> _RouteFi
     locator = config_root / locator_basename
     if locator.exists() or locator.is_symlink():
         raise FileExistsError(locator_basename)
-    root = data_root / f"f017-sequence38-{os.urandom(16).hex()}"
+    sequence = "sequence39" if locator_basename == _SEQUENCE39_LOCATOR_BASENAME else "sequence38"
+    root = data_root / f"f017-{sequence}-{os.urandom(16).hex()}"
     root.mkdir(mode=0o700)
     _fsync_directory(root.parent)
     registry = root / "route-registry.json"
